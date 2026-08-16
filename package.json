@@ -1,0 +1,25 @@
+{
+  "name": "kindle-assistant",
+  "version": "0.1.0",
+  "description": "PC-side data service that turns a jailbroken Kindle (e-ink) into an assistant display: live model + token kanban sourced from WorkBuddy's local DB, plus a werewolf game module (planned).",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "pretest": "node test/fixtures/build.mjs",
+    "test": "node --test",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.0.0"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

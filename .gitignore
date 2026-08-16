@@ -1,0 +1,20 @@
+# dependencies
+node_modules/
+
+# local DBs (never commit live or fixture data)
+*.db
+*.db-wal
+*.db-shm
+test/fixtures/*.db
+
+# WorkBuddy internal state
+.workbuddy/
+
+# jailbreak binaries (large, downloaded assets; MANIFEST.md + README.md are tracked)
+kindle-jailbreak/*.zip
+kindle-jailbreak/*.bin
+kindle-jailbreak/*.tar.xz
+
+# misc
+.DS_Store
+npm-debug.log*
