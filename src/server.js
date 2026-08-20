@@ -54,6 +54,9 @@ ${row('人民币 CNY', fx.cny)} ${row('卢比 INR', fx.inr)}
 export function createServer({ db = null, cfg = config } = {}) {
   return http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
+    const remote = req.socket.remoteAddress || '?';
+    const t = new Date().toISOString().slice(11, 23);
+    console.log(`[dash] ${t} ${remote} ${req.method} ${url.pathname}`);
 
     if (url.pathname === '/api/dashboard') {
       try {

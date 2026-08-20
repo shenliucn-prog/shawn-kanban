@@ -12,7 +12,8 @@ local json = require("json")
 local logger = require("logger")
 
 local REFRESH_SEC = 30 * 60 -- 自动刷新间隔：30 分钟
-local DEFAULT_HOST = "192.168.31.188:8787"
+local DEFAULT_HOST = "192.168.31.188"
+local DEFAULT_PORT = "8787"
 
 local KindleDash = WidgetContainer:new{
     name = "KindleDash",
@@ -34,16 +35,27 @@ function KindleDash:settingsPath()
     return DataStorage:getSettingsDir() .. "/kindledash.lua"
 end
 function KindleDash:loadHost()
+    local host, port = DEFAULT_HOST, DEFAULT_PORT
     local ok, s = pcall(function() return LuaSettings:open(self:settingsPath()) end)
-    if ok and s and s:has("host") then
-        return s:readSetting("host") or DEFAULT_HOST
+    if ok and s then
+        if s:has("host") then host = s:readSetting("host") or DEFAULT_HOST end
+        if s:has("port") then port = s:readSetting("port") or DEFAULT_PORT end
     end
-    return DEFAULT_HOST
+    -- host 可能是 "IP"、"IP:port" 或 "IP" + 单独存了 port
+    if host and not host:find(":", 1, true) then
+        host = host .. ":" .. port
+    end
+    return host
 end
 function KindleDash:saveHost(host)
     local ok, s = pcall(function() return LuaSettings:open(self:settingsPath()) end)
     if ok and s then
         s:saveSetting("host", host)
+        local h, p = host:match("^(.-):(%d+)$")
+        if h and p then
+            s:saveSetting("host", h)
+            s:saveSetting("port", p)
+        end
         s:flush()
     end
     self.host = host
