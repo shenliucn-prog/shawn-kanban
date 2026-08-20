@@ -5,32 +5,21 @@ import { config } from './config.js';
 let db = null;
 try {
   db = openDb(config.dbPath);
-  console.log('[kindle-assistant] opened DB:', config.dbPath);
+  console.log('[kindle-dash] opened DB:', config.dbPath);
 } catch (e) {
-  console.warn(
-    '[kindle-assistant] WARN: could not open DB at',
-    config.dbPath,
-    '-',
-    e.message
-  );
-  console.warn(
-    '[kindle-assistant] service will run, but /api/status returns null until the DB is available.'
-  );
+  console.warn('[kindle-dash] WARN: could not open DB at', config.dbPath, '-', e.message);
+  console.warn('[kindle-dash] service still runs; WorkBuddy quota will show unavailable.');
 }
 
 const server = createServer({ db, cfg: config });
 
 server.listen(config.port, config.host, () => {
-  console.log(
-    `[kindle-assistant] listening on http://${config.host}:${config.port}`
-  );
-  console.log(
-    `[kindle-assistant] Kindle can open http://<this-pc-ip>:${config.port}/`
-  );
+  console.log(`[kindle-dash] listening on http://${config.host}:${config.port}`);
+  console.log(`[kindle-dash] Kindle/MacBook open http://<this-machine-ip>:${config.port}/api/dashboard`);
 });
 
 function shutdown() {
-  console.log('[kindle-assistant] shutting down...');
+  console.log('[kindle-dash] shutting down...');
   try {
     server.close();
   } catch {

@@ -18,3 +18,5 @@ kindle-jailbreak/*.tar.xz
 # misc
 .DS_Store
 npm-debug.log*
+kindle-dash-export.zip
+export/*.zip

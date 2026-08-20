@@ -37,7 +37,25 @@ test('/ returns an HTML page', async () => {
     const res = await fetch(`http://127.0.0.1:${port}/`);
     assert.equal(res.status, 200);
     const html = await res.text();
-    assert.match(html, /Kindle Assistant/i);
+    assert.match(html, /Kindle Dash/i);
+  } finally {
+    server.close();
+    db.close();
+  }
+});
+
+test('/api/dashboard returns aggregated payload', async () => {
+  const db = openDb(FIXTURE);
+  const server = createServer({ db });
+  const port = await listen(server);
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/dashboard`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.ok, true);
+    assert.ok(body.quotas && body.quotas.workbuddy);
+    assert.ok(Array.isArray(body.clocks.items));
+    assert.ok(body.stocks && Array.isArray(body.stocks.items));
   } finally {
     server.close();
     db.close();

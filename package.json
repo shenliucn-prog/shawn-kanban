@@ -1,7 +1,7 @@
 {
   "name": "kindle-assistant",
   "version": "0.1.0",
-  "description": "PC-side data service that turns a jailbroken Kindle (e-ink) into an assistant display: live model + token kanban sourced from WorkBuddy's local DB, plus a werewolf game module (planned).",
+  "description": "Cross-platform (Windows/macOS) data service that turns a jailbroken Kindle into an e-ink assistant dashboard: WorkBuddy / Claude Code / Codex quotas, weather, US & A-share markets, world clocks and FX — served over LAN to the KOReader KindleDash plugin.",
   "type": "module",
   "main": "src/index.js",
   "scripts": {

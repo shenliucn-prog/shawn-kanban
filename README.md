@@ -1,95 +1,39 @@
-# kindle-assistant
+# Kindle Dash — 越狱 Kindle 常驻小助手数据服务
 
-把一台已越狱的 Kindle（e-ink 墨水屏）改造成**常驻小助手显示屏**的 PC 侧数据服务。
+跨平台（Windows / macOS）Node.js 服务，把越狱 Kindle 的墨水屏变成一张常驻看板：
+**WorkBuddy / Claude Code / Codex 限额、天气、美股 + A股、世界时钟、汇率**，
+通过局域网喂给 KOReader 的 **KindleDash** 插件，插件每 30 分钟自动刷新。
 
-当前已落地：从 WorkBuddy 本机本地数据库读取 **当前模型 + token 用量**，通过轻量 HTTP 服务（`/api/status`）提供给 Kindle 端渲染。狼人杀模块为下一步（见任务 #8）。
-
-## 架构
-
-```
-┌─────────────┐   HTTP (LAN / USB)   ┌──────────────────┐
-│  Kindle     │ ───────────────────▶ │  PC 本服务        │
-│ (e-ink 显示) │ ◀─────────────────── │  kindle-assistant │
-│  点按交互    │   /api/status JSON   │  读 workbuddy.db  │
-└─────────────┘                      └──────────────────┘
-```
-
-- **边界**：Kindle 只显示 + 自身点按，**不**反向控制电脑。
-- **数据源**：纯本地只读 `C:\Users\Shen\.workbuddy\workbuddy.db`（SQLite，WAL）。无需联网/API。
-  - `session_usage.used` / `session_usage.size` → token 已用/总额，`剩余 = size − used`
-  - `sessions.model` → 当前模型；取 `last_activity_at` 最新的会话
-- **e-ink 约束**：只服务慢变静态信息；页面黑白、大字号、无动画；刷新建议手动点刷或数分钟间隔。
-
-## 快速开始（开发）
+## 运行（Windows 或 macOS 通用）
 
 ```bash
-npm install          # 安装依赖（better-sqlite3 等）
-npm test             # 单元测试（node:test，自动生成 fixture DB）
-npm run lint         # ESLint
-npm start            # 启动服务，默认 http://0.0.0.0:8787
+npm install
+npm start
+# 浏览器打开 http://127.0.0.1:8787/       看网页版看板
+#           http://127.0.0.1:8787/api/dashboard  拿 JSON
 ```
 
-环境变量：
+在 **MacBook** 上工作时，同样地 `npm install && npm start`，让 Kindle 连同一个 WiFi，
+把 KindleDash 插件的服务器地址改成 MacBook 的局域网 IP（插件菜单 → Set server address）。
 
-| 变量 | 默认 | 说明 |
-|------|------|------|
-| `WORKBUDDY_DB_PATH` | `~/.workbuddy/workbuddy.db` | 本地数据库路径 |
-| `HOST` | `0.0.0.0` | 绑定地址（0.0.0.0 = 局域网可达） |
-| `PORT` | `8787` | 监听端口 |
-| `WORKBUDDY_CWD` | 空 | 限定到某工作区 cwd；空=最新会话 |
+### 让服务开机自启 / 崩溃自拉起（可选）
+- Windows：`npm install -g pm2` 后 `pm2 start src/index.js --name kindle-dash`
+- macOS：`brew install pm2 && pm2 start src/index.js --name kindle-dash`，再 `pm2 save && pm2 startup`
 
-## API
+## 配置（config.json 或环境变量，环境变量优先）
 
-`GET /api/status` →
+| 项目 | config.json | 环境变量 |
+|------|-------------|----------|
+| 绑定地址/端口 | `host` / `port` | `HOST` / `PORT` |
+| 城市与坐标 | `weather.city/lat/lon` | `DASH_CITY` / `DASH_LAT` / `DASH_LON` |
+| 股票列表 | `stocks` | `DASH_STOCKS`(JSON) |
+| 世界时钟 | `clocks` | `DASH_CLOCKS`(JSON) |
+| 限额上限 | `claudeCap` / `codexCap` | `DASH_CLAUDE_CAP` / `DASH_CODEX_CAP` |
+| WorkBuddy 库路径 | — | `WORKBUDDY_DB_PATH` |
 
-```json
-{
-  "ok": true,
-  "data": {
-    "model": "hy3",
-    "title": "开始进行规划",
-    "status": "planning",
-    "token": { "used": 43833, "size": 192000, "remaining": 148167, "percent": 22.8 },
-    "credit": null,
-    "lastActivityAt": 1786819701164,
-    "updatedAt": 1786819746414,
-    "source": "session"
-  },
-  "serverTime": 1786819800000
-}
-```
+天气=Open-Meteo、汇率=open.er-api.com、股票=Yahoo Finance，**均免 API key**。
+限额中的 Claude Code / Codex 取自本机历史目录近 7 天的统计，为近似值（标注 `approx`）。
 
-`GET /` → e-ink 友好的简易状态页。
-
-## 项目结构
-
-```
-src/
-  config.js        # 运行时配置（环境变量覆盖）
-  status.js        # 纯函数：计算/格式化状态（无 I/O，易测）
-  db.js            # 只读打开 SQLite + 读取状态逻辑
-  server.js        # HTTP 服务（/api/status、/）
-  index.js         # 入口：打开 DB、监听、优雅退出
-test/
-  status.test.js   # 纯逻辑单测
-  db.test.js       # DB 读取单测（fixture）
-  server.test.js   # 服务单测（端点）
-  fixtures/        # 自动生成的测试 SQLite（build.mjs, *.db）
-.github/workflows/ # CI：lint + test（Node 22）
-kindle-jailbreak/  # 越狱物料（见其内 MANIFEST.md / README.md）
-```
-
-## CI/CD
-
-GitHub Actions（`.github/workflows/ci.yml`）：`checkout → setup-node 22 → npm ci → npm run lint → npm test`。连接 GitHub 仓库后 push/PR 即自动跑。
-
-## Kindle 接入（下一步 #4/#6/#7）
-
-1. Kindle 越狱并装好 MRPI + KUAL + KOReader（物料见 `kindle-jailbreak/`）。
-2. PC 放通防火墙入站规则（端口 8787）。
-3. Kindle 通过 KOReader 内置浏览器或 USBNetwork(USB SSH) 访问 `http://<PC局域网IP>:8787/`。
-4. 看板/狼人杀入口整合进 KUAL 启动器（任务 #9）。
-
-## 越狱物料
-
-见 [`kindle-jailbreak/`](./kindle-jailbreak/) 目录：`MANIFEST.md` 含 6 项物料（KindleBreak / Hotfix / MRPI / KUAL / USBNetwork / KOReader）的下载源、大小、MD5 与解压自检结果。**操作 Kindle 前务必保持飞行模式、冻版本（5.13.3）、用 USB 数据线拷文件。**
+## Kindle 端（一次性部署）
+把 `KindleDash.koplugin/` 整个文件夹拷到 Kindle 的 `koreader/plugins/` 下，
+重启 KOReader → 工具 → Kindle Dash → Refresh。防火墙需放行 `TCP 8787` 入站。
