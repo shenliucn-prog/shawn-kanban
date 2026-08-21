@@ -5,27 +5,7 @@
 import json, urllib.request, math, sys
 
 SCREEN_W, SCREEN_H = 758, 1024
-FONT = 26          # main.lua showDashboard 用的字号
-PAD = 16           # frame padding
-LINE_H = int(FONT * 1.18)  # TextBoxWidget 默认行高近似
-CH_FULL, CH_HALF = FONT, FONT // 2   # 全角/半角近似像素宽
-
-SPARK = ["▁","▂","▃","▄","▅","▆","▇","█"]
-
-def wc(s):
-    """按 KOReader 比例字体近似计算像素宽：CJK/全角=CH_FULL，ASCII/半角=CH_HALF。"""
-    w = 0
-    for ch in s:
-        o = ord(ch)
-        if o < 128:
-            w += CH_HALF
-        elif 0xFF00 <= o <= 0xFFEF or o in (0x2026, 0x2014, 0x2018, 0x2019, 0x201C, 0x201D):
-            w += CH_FULL
-        elif 0x2581 <= o <= 0x2588:
-            w += CH_FULL  # 块字符按全宽保守计算
-        else:
-            w += CH_FULL
-    return w
+PAD = 12           # frame padding（main.lua showDashboard）
 
 def pad_text(s, width):
     s = str(s)
@@ -67,9 +47,17 @@ def num(v, d=None):
         return ("%%.%df" % d) % v
     return str(v)
 
-COLW = 27
-def col2(left, right=""):
-    return pad_text(str(left), COLW) + " " + str(right)
+def wc_for(sz, s):
+    """按字号 sz 估算像素宽：CJK/全角=sz，ASCII/半角=sz/2（对应 main.lua textWidth）。"""
+    w = 0
+    half = sz / 2.0
+    for ch in s:
+        o = ord(ch)
+        if o < 128:
+            w += half
+        else:
+            w += sz
+    return w
 
 def price_text(v):
     if v is None:
@@ -82,73 +70,125 @@ def stock_cell(s):
     p = "" if s.get("changePct") is None else ("%.1f%%" % abs(s.get("changePct")))
     return "%s %s %s %s%s" % (mkt, s.get("label", s.get("sym")), price_text(s.get("price")), sign, p)
 
-def render(d):
-    L = []
+def clock_cell(c):
+    return "%s %s %s" % (c.get("city"), c.get("time"), c.get("date"))
+
+def build_modules(d, colw):
+    """复刻 main.lua buildModuleTexts，返回 [模块完整文本(含标题行), ...]。"""
+    fullw = 2 * colw + 1
+    def col2full(left, right=""):
+        return pad_text(str(left), colw) + " " + pad_text(str(right), colw)
+    def module_text(title, lines):
+        return "\n".join([pad_text(title, fullw)] + lines)
+
     q = d.get("quotas", {})
-    L.append("SHAWN KANBAN")
+    w = d.get("weather", {})
+    st = d.get("stocks", {}).get("items", [])
+    fx = d.get("fx", {})
+    cl = d.get("clocks", {}).get("items", [])
+
+    tok = []
     wb = q.get("workbuddy", {})
     if wb.get("ok"):
         t = wb.get("token", {})
-        L.append("WorkBuddy 剩余 %s/%s (%d%%)" % (t.get("remaining", "?"), t.get("size", "?"), t.get("percent") or 0))
+        tok.append(pad_text("WorkBuddy %s/%s (%d%%)" % (t.get("remaining", "?"), t.get("size", "?"), t.get("percent") or 0), fullw))
     else:
-        L.append("WorkBuddy 不可用 (%s)" % wb.get("error", ""))
+        tok.append(pad_text("WorkBuddy 不可用", fullw))
     cc = q.get("claudecode", {})
     cx = q.get("codex", {})
-    L.append(col2("ClaudeCode %s/%s" % (cc.get("used7d", "?"), cc.get("cap", "?")),
-                  "Codex %s/%s" % (cx.get("used7d", "?"), cx.get("cap", "?"))))
-    w = d.get("weather", {})
-    L.append("")
+    tok.append(col2full("ClaudeCode %s/%s" % (cc.get("used7d", "?"), cc.get("cap", "?")),
+                        "Codex %s/%s" % (cx.get("used7d", "?"), cx.get("cap", "?"))))
+
+    wea = []
     if w.get("ok"):
-        L.append("天气 · %s  %s %s°C  高%s 低%s 湿%s%%" % (w.get("city", ""), w.get("text", ""), w.get("temp", "?"), w.get("high", "?"), w.get("low", "?"), w.get("humidity", "?")))
+        wea.append(pad_text("天气 · %s  %s %s°C  高%s 低%s 湿%s%%" % (w.get("city", ""), w.get("text", ""), w.get("temp", "?"), w.get("high", "?"), w.get("low", "?"), w.get("humidity", "?")), fullw))
     else:
-        L.append("天气 不可用 (%s)" % w.get("error", ""))
-    st = d.get("stocks", {}).get("items", [])
-    L.append("")
-    L.append("── 股市 ──")
+        wea.append(pad_text("天气 不可用", fullw))
+
+    stk = []
     for i in range(0, len(st), 2):
-        L.append(col2(stock_cell(st[i]), stock_cell(st[i + 1]) if i + 1 < len(st) else ""))
-    fx = d.get("fx", {})
-    L.append("")
-    L.append("── 汇率 ──")
-    L.append(col2("CNY " + num(fx.get("cny"), 3), "INR " + num(fx.get("inr"), 3)))
-    cl = d.get("clocks", {}).get("items", [])
-    L.append("")
-    L.append("── 时钟 ──")
+        stk.append(col2full(stock_cell(st[i]), stock_cell(st[i + 1]) if i + 1 < len(st) else ""))
+
+    fxx = [col2full("CNY " + num(fx.get("cny"), 3), "INR " + num(fx.get("inr"), 3))]
+
+    clk = []
     for i in range(0, len(cl), 2):
         lc = cl[i]
         rc = cl[i + 1] if i + 1 < len(cl) else None
-        L.append(col2("%s %s %s" % (lc.get("city"), lc.get("time"), lc.get("date")),
-                      "%s %s %s" % (rc.get("city"), rc.get("time"), rc.get("date")) if rc else ""))
-    L.append("")
-    L.append("更新 23:59:00")
-    return L
+        clk.append(col2full(clock_cell(lc), clock_cell(rc) if rc else ""))
+
+    upd = [pad_text("更新 00:05:00", fullw)]
+
+    return [
+        module_text("TOKEN USAGE", tok),
+        module_text("天气", wea),
+        module_text("股市", stk),
+        module_text("汇率", fxx),
+        module_text("时钟", clk),
+        module_text("更新", upd),
+    ]
+
+def choose_size(d, availW, availH):
+    """复刻 main.lua chooseSize：从 26 往下选，直到 行宽≤availW 且 总高≤availH。"""
+    for sz in (26, 24, 22, 20, 18):
+        half = max(1, sz // 2)
+        colw = int((availW - half) / 2 / half)
+        mods = build_modules(d, colw)
+        ok, total_lines = True, 0
+        for m in mods:
+            for line in m.split("\n"):
+                total_lines += 1
+                if wc_for(sz, line) > availW:
+                    ok = False
+                    break
+            if not ok:
+                break
+        if ok:
+            lineH = math.ceil(sz * 1.3)
+            titleH = math.ceil((sz + 2) * 1.3)
+            totalH = titleH + total_lines * lineH + len(mods) * 18
+            if totalH <= availH:
+                return sz
+    return 18
+
+def render(d):
+    """返回 (lines, sz, colw)。lines 为所有模块的所有行。"""
+    availW = SCREEN_W - 2 * PAD
+    availH = SCREEN_H - 2 * PAD
+    sz = choose_size(d, availW, availH)
+    half = max(1, sz // 2)
+    colw = int((availW - half) / 2 / half)
+    lines = []
+    for m in build_modules(d, colw):
+        lines.extend(m.split("\n"))
+    return lines, sz, colw
 
 def main():
     if len(sys.argv) > 1:
         d = json.load(open(sys.argv[1], encoding="utf-8"))
     else:
         d = json.load(urllib.request.urlopen("http://127.0.0.1:8787/api/dashboard", timeout=20))
-    lines = render(d)
+    lines, sz, colw = render(d)
     avail_w = SCREEN_W - 2 * PAD
     avail_h = SCREEN_H - 2 * PAD
+    line_h = math.ceil(sz * 1.3)
     total_h = 0
-    print("=== 排版检查 (屏幕 %dx%d, 字号 %d, 可用 %dx%d) ===" % (SCREEN_W, SCREEN_H, FONT, avail_w, avail_h))
-    print("%-52s %7s %s" % ("行内容", "宽(px)", "状态"))
+    print("=== 排版检查 (屏幕 %dx%d, 字号 %d(自适应), 列宽 %d单位, 可用 %dx%d) ===" % (SCREEN_W, SCREEN_H, sz, colw, avail_w, avail_h))
     warn = 0
-    for i, line in enumerate(lines):
-        w = wc(line)
+    for line in lines:
+        w = wc_for(sz, line)
         wraps = max(0, math.ceil(w / avail_w) - 1)
-        used = (wraps + 1) * LINE_H
+        used = (wraps + 1) * line_h
         total_h += used
         status = "OK"
         if w > avail_w:
             warn += 1
-            status = "!! 超宽 %dpx(约换%d行)" % (w - avail_w, wraps)
-        print("  %-50s %6d  %s" % (line[:50] if len(line) <= 50 else line[:47] + "...", w, status))
+            status = "!! 超宽 %dpx" % (w - avail_w)
+        print("  %-46s %6.0f  %s" % (line[:46] if len(line) <= 46 else line[:43] + "...", w, status))
     print("---")
-    print("总行数(逻辑): %d, 总高(含换行): %dpx, 可用高: %dpx, %s" % (
+    print("总行数: %d, 总高: %dpx, 可用高: %dpx, %s" % (
         len(lines), total_h, avail_h,
-        "余量 %dpx" % (avail_h - total_h) if total_h <= avail_h else "!! 溢出 %dpx(需滚动)" % (total_h - avail_h)))
+        "余量 %dpx" % (avail_h - total_h) if total_h <= avail_h else "!! 溢出 %dpx" % (total_h - avail_h)))
     print("超宽行数: %d" % warn)
 
 if __name__ == "__main__":

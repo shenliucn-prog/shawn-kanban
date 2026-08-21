@@ -1,5 +1,5 @@
 import { fetchJson, cached } from '../cache.js';
-import { config } from '../config.js';
+import { getConfig } from '../config.js';
 
 // WMO weather code -> short Chinese description.
 const WMO = {
@@ -17,7 +17,7 @@ const WMO = {
 const wmo = (c) => WMO[c] ?? `码${c}`;
 
 export async function getWeather() {
-  const { lat, lon, city } = config.weather;
+  const { lat, lon, city } = getConfig().weather;
   const url =
     `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
     `&current=temperature_2m,weather_code,relative_humidity_2m` +

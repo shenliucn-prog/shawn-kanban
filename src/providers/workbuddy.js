@@ -1,5 +1,5 @@
 import { readStatus } from '../db.js';
-import { config } from '../config.js';
+import { getConfig } from '../config.js';
 
 // WorkBuddy token quota, read live from its local SQLite DB (read-only).
 export function getWorkbuddy(db) {
@@ -7,7 +7,7 @@ export function getWorkbuddy(db) {
     return { ok: false, error: 'db unavailable', model: 'unknown', token: null };
   }
   try {
-    const s = readStatus(db, { cwdFilter: config.cwdFilter });
+    const s = readStatus(db, { cwdFilter: getConfig().cwdFilter });
     const t = s.token || {};
     return {
       ok: true,

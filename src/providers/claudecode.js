@@ -1,13 +1,13 @@
 import { join } from 'node:path';
 import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
-import { paths, config } from '../config.js';
+import { paths, getConfig } from '../config.js';
 
 const WEEK = 7 * 24 * 60 * 60 * 1000;
 
 // Count assistant/user messages in ~/.claude/projects/*.jsonl over the last 7 days.
 // This is an approximation of Claude Code usage derived from local history.
 export function getClaudeCodeUsage() {
-  const cap = config.claudeCap;
+  const cap = getConfig().claudeCap;
   const dir = paths.claude;
   if (!existsSync(dir)) {
     return { ok: false, error: 'no ~/.claude/projects', cap };

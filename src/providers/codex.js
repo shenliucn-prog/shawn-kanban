@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { readdirSync, statSync, existsSync } from 'node:fs';
-import { paths, config } from '../config.js';
+import { paths, getConfig } from '../config.js';
 
 const WEEK = 7 * 24 * 60 * 60 * 1000;
 
@@ -8,7 +8,7 @@ const WEEK = 7 * 24 * 60 * 60 * 1000;
 // last 7 days under the Codex data directory. Structure varies by version,
 // so this is best-effort and clearly labelled as an approximation.
 export function getCodexUsage() {
-  const cap = config.codexCap;
+  const cap = getConfig().codexCap;
   const dir = paths.codexCandidates.find((p) => existsSync(p));
   if (!dir) {
     return { ok: false, error: 'no codex data dir found', cap };

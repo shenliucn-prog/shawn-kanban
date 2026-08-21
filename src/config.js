@@ -4,16 +4,9 @@ import { readFileSync, existsSync } from 'node:fs';
 
 // Load an optional config.json from the project root so users can tune
 // behaviour without editing code. Precedence: env var > config.json > default.
+// `getConfig()` re-reads config.json on every call → editing config.json and
+// refreshing the dashboard takes effect WITHOUT restarting the service.
 const HOME = homedir();
-const fileConfig = (() => {
-  try {
-    const p = join(process.cwd(), 'config.json');
-    if (existsSync(p)) return JSON.parse(readFileSync(p, 'utf-8'));
-  } catch {
-    /* ignore */
-  }
-  return {};
-})();
 
 const DEFAULT_STOCKS = [
   { sym: 'SPY', name: '标普ETF', mkt: 'US' },
@@ -32,49 +25,66 @@ const DEFAULT_CLOCKS = [
   { city: '德里', tz: 'Asia/Kolkata' }
 ];
 
-const cfg = {
-  host: fileConfig.host ?? '0.0.0.0',
-  port: Number(fileConfig.port ?? 8787),
+function buildConfig() {
+  let fileConfig = {};
+  try {
+    const p = join(process.cwd(), 'config.json');
+    if (existsSync(p)) fileConfig = JSON.parse(readFileSync(p, 'utf-8'));
+  } catch {
+    /* ignore */
+  }
 
-  dbPath: join(HOME, '.workbuddy', 'workbuddy.db'),
-  cwdFilter: '',
+  const cfg = {
+    host: fileConfig.host ?? '0.0.0.0',
+    port: Number(fileConfig.port ?? 8787),
 
-  weather: {
-    city: '深圳',
-    lat: 22.54,
-    lon: 114.06,
-    ...(fileConfig.weather || {})
-  },
-  fxBase: fileConfig.fxBase ?? 'USD',
-  stocks: fileConfig.stocks ?? DEFAULT_STOCKS,
-  clocks: fileConfig.clocks ?? DEFAULT_CLOCKS,
+    dbPath: join(HOME, '.workbuddy', 'workbuddy.db'),
+    cwdFilter: '',
 
-  claudeCap: Number(fileConfig.claudeCap ?? 1000),
-  codexCap: Number(fileConfig.codexCap ?? 500),
+    weather: {
+      city: '深圳',
+      lat: 22.54,
+      lon: 114.06,
+      ...(fileConfig.weather || {})
+    },
+    fxBase: fileConfig.fxBase ?? 'USD',
+    stocks: fileConfig.stocks ?? DEFAULT_STOCKS,
+    clocks: fileConfig.clocks ?? DEFAULT_CLOCKS,
 
-  staleMs: Number(fileConfig.staleMs ?? 10 * 60 * 1000)
-};
+    claudeCap: Number(fileConfig.claudeCap ?? 1000),
+    codexCap: Number(fileConfig.codexCap ?? 500),
 
-// Environment overrides (documented in README).
-const env = process.env;
-if (env.HOST) cfg.host = env.HOST;
-if (env.PORT) cfg.port = Number(env.PORT);
-if (env.WORKBUDDY_DB_PATH) cfg.dbPath = env.WORKBUDDY_DB_PATH;
-if (env.WORKBUDDY_CWD) cfg.cwdFilter = env.WORKBUDDY_CWD;
-if (env.DASH_CITY) cfg.weather.city = env.DASH_CITY;
-if (env.DASH_LAT) cfg.weather.lat = Number(env.DASH_LAT);
-if (env.DASH_LON) cfg.weather.lon = Number(env.DASH_LON);
-if (env.DASH_FX_BASE) cfg.fxBase = env.DASH_FX_BASE;
-if (env.DASH_STOCKS) {
-  try { cfg.stocks = JSON.parse(env.DASH_STOCKS); } catch { /* ignore */ }
+    staleMs: Number(fileConfig.staleMs ?? 10 * 60 * 1000)
+  };
+
+  // Environment overrides (documented in README).
+  const env = process.env;
+  if (env.HOST) cfg.host = env.HOST;
+  if (env.PORT) cfg.port = Number(env.PORT);
+  if (env.WORKBUDDY_DB_PATH) cfg.dbPath = env.WORKBUDDY_DB_PATH;
+  if (env.WORKBUDDY_CWD) cfg.cwdFilter = env.WORKBUDDY_CWD;
+  if (env.DASH_CITY) cfg.weather.city = env.DASH_CITY;
+  if (env.DASH_LAT) cfg.weather.lat = Number(env.DASH_LAT);
+  if (env.DASH_LON) cfg.weather.lon = Number(env.DASH_LON);
+  if (env.DASH_FX_BASE) cfg.fxBase = env.DASH_FX_BASE;
+  if (env.DASH_STOCKS) {
+    try { cfg.stocks = JSON.parse(env.DASH_STOCKS); } catch { /* ignore */ }
+  }
+  if (env.DASH_CLOCKS) {
+    try { cfg.clocks = JSON.parse(env.DASH_CLOCKS); } catch { /* ignore */ }
+  }
+  if (env.DASH_CLAUDE_CAP) cfg.claudeCap = Number(env.DASH_CLAUDE_CAP);
+  if (env.DASH_CODEX_CAP) cfg.codexCap = Number(env.DASH_CODEX_CAP);
+
+  return cfg;
 }
-if (env.DASH_CLOCKS) {
-  try { cfg.clocks = JSON.parse(env.DASH_CLOCKS); } catch { /* ignore */ }
-}
-if (env.DASH_CLAUDE_CAP) cfg.claudeCap = Number(env.DASH_CLAUDE_CAP);
-if (env.DASH_CODEX_CAP) cfg.codexCap = Number(env.DASH_CODEX_CAP);
 
-export const config = cfg;
+// Static snapshot for startup-time concerns (host/port/dbPath). Providers that
+// need fresh values (stocks/clocks/weather/fx/caps) must use getConfig().
+export const config = buildConfig();
+export function getConfig() {
+  return buildConfig();
+}
 
 // Where the local AI-tool history lives on each OS.
 export const paths = {

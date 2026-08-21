@@ -1,5 +1,5 @@
 import { cached } from '../cache.js';
-import { config } from '../config.js';
+import { getConfig } from '../config.js';
 
 // Tencent finance (gtimg) is reliable from mainland China for both US and
 // A-share quotes. Response is GBK-encoded, but the numeric fields we need are
@@ -113,7 +113,7 @@ async function getSparks(list) {
 }
 
 export async function getStocks() {
-  const list = config.stocks || [];
+  const list = getConfig().stocks || [];
   if (!list.length) return { ok: false, error: 'no stocks configured', items: [] };
 
   const codes = list.map(toGtimgCode);

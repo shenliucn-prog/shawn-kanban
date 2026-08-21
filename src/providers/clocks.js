@@ -1,4 +1,4 @@
-import { config } from '../config.js';
+import { getConfig } from '../config.js';
 
 // Pure local computation — no network needed.
 function timeIn(tz) {
@@ -20,7 +20,7 @@ function timeIn(tz) {
 }
 
 export function getClocks() {
-  const items = config.clocks.map((c) => ({
+  const items = getConfig().clocks.map((c) => ({
     city: c.city,
     tz: c.tz,
     ...timeIn(c.tz)

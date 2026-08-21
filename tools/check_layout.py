@@ -12,34 +12,37 @@ def worst_case(d):
     d = copy.deepcopy(d)
     for i, s in enumerate(d.get("stocks", {}).get("items", [])):
         s["name"] = s["label"] = ("深证成指" if i % 2 else "贵州茅台")  # 4 字全角最宽
-        s["price"] = 9999.99  # 显示 10000.0（7 字符，现实量级上界）
-        s["changePct"] = 10.0
+        s["price"] = 999999.99  # 显示 1000000.0（9 字符），逼迫字号自适应降档
+        s["changePct"] = 100.0
         if s.get("spark"):
             s["spark"]["closes"] = [100 + (j % 8) for j in range(30)]
     return d
 
 def check(d, label):
-    lines = K.render(d)
+    lines, sz, colw = K.render(d)
     avail_w = K.SCREEN_W - 2 * K.PAD
     avail_h = K.SCREEN_H - 2 * K.PAD
+    line_h = math.ceil(sz * 1.3)
     total_h = 0
     overflow = 0
     for line in lines:
-        w = K.wc(line)
-        wraps = max(0, math.ceil(w / avail_w) - 1)
-        total_h += (wraps + 1) * K.LINE_H
+        w = K.wc_for(sz, line)
+        total_h += line_h
         if w > avail_w:
             overflow += 1
-            print(f"    !! 超宽 {w}px: {line[:40]}")
-    margin = avail_h - total_h
-    ok = (overflow == 0 and margin >= 80)
-    print(f"  [{label}] 行数={len(lines)} 总高={total_h}px 可用={avail_h}px 余量={margin}px 超宽={overflow}  -> {'✓ 一屏' if ok else '✗ 需修正'}")
+            print(f"    !! 超宽 {w:.0f}px: {line[:44]}")
+    # 与 main.lua chooseSize 相同的总高口径（含标题行 + 6 个模块边框开销）
+    title_h = math.ceil((sz + 2) * 1.3)
+    total_h_est = title_h + len(lines) * line_h + 6 * 18
+    margin = avail_h - total_h_est
+    ok = (overflow == 0 and margin >= 60)
+    print(f"  [{label}] 字号={sz} 行数={len(lines)} 总高(估)={total_h_est}px 可用={avail_h}px 余量={margin}px 超宽={overflow}  -> {'✓ 一屏' if ok else '✗ 需修正'}")
     return ok
 
 def main():
     d = json.load(urllib.request.urlopen("http://127.0.0.1:8787/api/dashboard", timeout=20))
     all_ok = True
-    print("=== 排版 5 遍检查（字号 %d, 屏幕 %dx%d）===" % (K.FONT, K.SCREEN_W, K.SCREEN_H))
+    print("=== 排版 5 遍检查（屏幕 %dx%d, 字号自适应 26→18）===" % (K.SCREEN_W, K.SCREEN_H))
     for i in range(1, 6):
         if i % 2 == 1:
             all_ok &= check(worst_case(d), f"第{i}遍·最坏情况")
