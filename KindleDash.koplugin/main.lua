@@ -136,13 +136,12 @@ function KindleDash:renderText(d)
     local L = {}
     local q = d.quotas or {}
 
-    table.insert(L, "═══ SHAWN KANBAN ═══")
-    table.insert(L, "当前 " .. os.date("%Y-%m-%d %H:%M:%S"))
+    table.insert(L, "SHAWN KANBAN")
     local wb = q.workbuddy or {}
     if wb.ok then
         local t = wb.token or {}
-        table.insert(L, string.format("WorkBuddy %s", tostring(wb.model or "?")))
-        table.insert(L, string.format("  剩余 %s / %s  (%d%%)",
+        table.insert(L, string.format("WorkBuddy %s  剩余%s/%s (%d%%)",
+            tostring(wb.model or "?"),
             tostring(t.remaining or "?"), tostring(t.size or "?"), t.percent or 0))
     else
         table.insert(L, "WorkBuddy  不可用 (" .. tostring(wb.error or "") .. ")")
@@ -158,11 +157,10 @@ function KindleDash:renderText(d)
 
     local w = d.weather or {}
     table.insert(L, "")
-    table.insert(L, "── 天气 ──")
+    table.insert(L, "── 天气 · " .. tostring(w.city or "") .. " ──")
     if w.ok then
-        table.insert(L, string.format("%s  %s %s°C", tostring(w.city or ""),
-            tostring(w.text or ""), tostring(w.temp or "?")))
-        table.insert(L, string.format("  高%s  低%s  湿度%s%%",
+        table.insert(L, string.format("%s %s°C  高%s  低%s  湿%s%%",
+            tostring(w.text or ""), tostring(w.temp or "?"),
             tostring(w.high or "?"), tostring(w.low or "?"), tostring(w.humidity or "?")))
     else
         table.insert(L, "  不可用 (" .. tostring(w.error or "") .. ")")
@@ -179,13 +177,12 @@ function KindleDash:renderText(d)
             arrow, s.changePct == nil and "" or pct(s.changePct)))
         local sp = s.spark
         if sp and sp.closes and #sp.closes >= 2 then
-            local mini = sparkline(sp.closes, 10)
+            local mini = sparkline(sp.closes, 8)
             if mini ~= "" then table.insert(L, "  30日 " .. mini) end
         end
     end
 
     local fx = d.fx or {}
-    table.insert(L, "")
     table.insert(L, "── 汇率 (1 " .. tostring(fx.base or "USD") .. ") ──")
     table.insert(L, string.format("CNY %s    INR %s", num(fx.cny, 3), num(fx.inr, 3)))
 
@@ -198,7 +195,6 @@ function KindleDash:renderText(d)
             tostring(c.time), tostring(c.date)))
     end
 
-    table.insert(L, "")
     table.insert(L, "更新 " .. os.date("%H:%M:%S"))
     return table.concat(L, "\n")
 end
