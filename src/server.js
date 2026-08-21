@@ -12,42 +12,173 @@ function sendJson(res, obj) {
   res.end(JSON.stringify(obj, null, 2));
 }
 
-function renderHtml(d) {
-  const q = d.quotas || {};
-  const w = d.weather || {};
-  const fx = d.fx || {};
-  const row = (k, v) => `<div class="row"><b>${k}</b>: ${v ?? 'n/a'}</div>`;
-  const stocks = (d.stocks?.items || [])
-    .map((s) => {
-      const pct = s.changePct == null ? '' : ` (${s.changePct > 0 ? '+' : ''}${s.changePct}%)`;
-      const cls = s.changePct == null ? '' : s.changePct >= 0 ? 'up' : 'down';
-      return `<div class="row">${s.mkt} ${s.label} [${s.sym}]: <span class="${cls}">${s.price ?? 'n/a'}${pct}</span></div>`;
-    })
-    .join('');
-  const clocks = (d.clocks?.items || [])
-    .map((c) => `<div class="row">${c.city}: ${c.time}</div>`)
-    .join('');
-
-  return `<!doctype html><html lang="zh"><head><meta charset="utf-8">
+// --- HTML dashboard (client-rendered, self-refreshing, one-screen layout) ---
+function renderHtml(initial) {
+  const initJson = JSON.stringify(initial ?? {})
+    .replace(/</g, '\\u003c')
+    .replace(/-->/g, '--\\u003e');
+  return `<!doctype html><html lang="zh"><head>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kindle Dash</title><style>
-body{background:#fff;color:#000;font-family:sans-serif;margin:2rem;}
-h1{font-size:1.8rem;} h2{font-size:1.4rem;border-bottom:2px solid #000;margin-top:1.5rem;}
-.row{font-size:1.2rem;margin:.4rem 0;} .up{color:#000;font-weight:bold;} .down{color:#555;}
-hr{border:none;border-top:2px solid #000;}
+<title>Kindle Dash</title>
+<style>
+:root{color-scheme:dark;}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:#0d1117;color:#e6edf3;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  min-height:100vh;padding:18px;font-size:14px;}
+.wrap{max-width:1180px;margin:0 auto;}
+header{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid #21262d;}
+header h1{font-size:20px;letter-spacing:1px;}
+header h1 span{color:#58a6ff;}
+header .meta{font-size:12px;color:#8b949e;}
+.badge{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;margin-left:6px;}
+.badge.ok{background:#122;color:#3fb950;border:1px solid #238636;}
+.badge.err{background:#221;color:#f85149;border:1px solid #da3633;}
+.grid{display:grid;gap:12px;margin-bottom:12px;}
+.grid.quotas{grid-template-columns:repeat(3,1fr);}
+.grid.main{grid-template-columns:1.1fr .9fr;}
+.card{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:14px 16px;}
+.card h2{font-size:12px;color:#8b949e;font-weight:600;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;display:flex;align-items:center;gap:6px;}
+.card h2 .ico{font-size:14px;}
+.quota-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+.quota-row:last-child{margin-bottom:0;}
+.qname{color:#e6edf3;font-size:13px;}
+.qval{font-size:15px;font-weight:700;}
+.qbar{height:4px;background:#21262d;border-radius:2px;margin-top:4px;overflow:hidden;}
+.qbar i{display:block;height:100%;border-radius:2px;}
+.qsub{font-size:11px;color:#8b949e;margin-top:4px;}
+.weather-main{display:flex;align-items:center;gap:14px;}
+.weather-ico{font-size:44px;line-height:1;}
+.weather-temp{font-size:40px;font-weight:800;}
+.weather-temp small{font-size:18px;color:#8b949e;}
+.weather-detail{margin-top:10px;font-size:13px;color:#c9d1d9;}
+.weather-detail b{color:#e6edf3;}
+.stocks-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:12px;}
+.stock{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;}
+.stock .sh{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px;}
+.stock .nm{font-size:14px;font-weight:700;}
+.stock .nm small{color:#8b949e;font-weight:500;margin-left:5px;font-size:11px;}
+.stock .pr{font-size:19px;font-weight:800;margin-top:4px;}
+.stock .pct{font-size:12px;font-weight:600;margin-top:2px;}
+.stock .spark{height:56px;margin-top:8px;}
+.stock .spark svg{width:100%;height:100%;}
+.stock .ft{font-size:10px;color:#6e7681;margin-top:6px;}
+.up{color:#f6465d;} .down{color:#0ecb81;} .flat{color:#8b949e;}
+.fx-cards{display:flex;gap:12px;}
+.fx-card{flex:1;background:#161b22;border:1px solid #30363d;border-radius:12px;padding:12px 14px;text-align:center;}
+.fx-card .fc{font-size:12px;color:#8b949e;margin-bottom:4px;}
+.fx-card .fv{font-size:22px;font-weight:800;}
+.clocks-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+.clock{display:flex;justify-content:space-between;align-items:baseline;background:#161b22;border:1px solid #30363d;border-radius:10px;padding:8px 12px;}
+.clock .cc{font-size:12px;color:#8b949e;}
+.clock .ct{font-size:16px;font-weight:700;}
+.clock .cd{font-size:11px;color:#6e7681;text-align:right;}
+.loading{color:#8b949e;text-align:center;padding:40px;font-size:15px;}
+@media(max-width:900px){
+  .grid.quotas{grid-template-columns:1fr;}
+  .grid.main{grid-template-columns:1fr;}
+  .stocks-grid{grid-template-columns:repeat(2,1fr);}
+}
 </style></head><body>
-<h1>Kindle Dash</h1>
-<h2>限额</h2>
-${row('WorkBuddy', q.workbuddy?.model + ' / 剩余 ' + (q.workbuddy?.token?.remaining ?? 'n/a'))}
-${row('Claude Code', (q.claudecode?.used7d ?? 'n/a') + ' / ' + (q.claudecode?.cap ?? ''))}
-${row('Codex', (q.codex?.used7d ?? 'n/a') + ' / ' + (q.codex?.cap ?? ''))}
-<h2>天气</h2>
-${row(w.city, (w.text ?? '') + ' ' + (w.temp ?? '') + '°C  高' + (w.high ?? '') + '/低' + (w.low ?? '') + '  湿' + (w.humidity ?? '') + '%')}
-<h2>股市</h2>${stocks}
-<h2>汇率 (1 ${fx.base})</h2>
-${row('人民币 CNY', fx.cny)} ${row('卢比 INR', fx.inr)}
-<h2>世界时钟</h2>${clocks}
-<hr><div class="row"><a href="/api/dashboard">JSON /api/dashboard</a></div>
+<div class="wrap">
+<header>
+  <h1>KINDLE <span>DASH</span></h1>
+  <div class="meta" id="meta">加载中…</div>
+</header>
+<div id="app"><div class="loading">加载中…</div></div>
+</div>
+<script>
+const INIT = ${initJson};
+const W_ICONS = {晴:'☀️',晴转多云:'🌤️',多云:'⛅',阴:'☁️',小雨:'🌦️',中雨:'🌧️',大雨:'⛈️',雷阵雨:'⛈️',雪:'🌨️',雾:'🌫️',霾:'🌫️'};
+function esc(s){return String(s ?? '').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function wIco(text){for(const k in W_ICONS){if((text||'').includes(k))return W_ICONS[k];}return '🌡️';}
+function sparkSvg(closes){
+  if(!closes||closes.length<2)return '';
+  const w=100,h=50;let min=Math.min(...closes),max=Math.max(...closes);
+  const span=max-min||1,n=closes.length;const pts=[];
+  for(let i=0;i<n;i++){const x=(i/(n-1))*w;const y=h-3-((closes[i]-min)/span)*(h-6);pts.push(x.toFixed(1)+','+y.toFixed(1));}
+  const up=closes[n-1]>=closes[0];
+  const stroke=up?'#f6465d':'#0ecb81';
+  const fill=up?'rgba(246,70,93,.14)':'rgba(14,203,129,.14)';
+  const line=pts.join(' ');
+  return '<svg viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none">'
+    +'<polygon points="0,'+h+' '+line+' '+w+','+h+'" fill="'+fill+'"/>'
+    +'<polyline points="'+line+'" fill="none" stroke="'+stroke+'" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>'
+    +'</svg>';
+}
+function render(d){
+  const q=d.quotas||{},w=d.weather||{},fx=d.fx||{};
+  const st=(d.stocks&&d.stocks.items)||[];
+  const cl=(d.clocks&&d.clocks.items)||[];
+  const qbar=(used,total,color)=>{const p=total?Math.min(100,(used/total)*100):0;
+    return '<div class="qbar"><i style="width:'+p+'%;background:'+color+'"></i></div>';};
+  let wbHtml='<div class="qsub">不可用 ('+esc(wbError(q.workbuddy))+')</div>';
+  function wbError(v){return v&&v.error?v.error:'未知';}
+  if(q.workbuddy&&q.workbuddy.ok){
+    const t=q.workbuddy.token||{};
+    const used=t.size-t.remaining;const p=Math.round(t.percent||0);
+    wbHtml='<div class="qval" style="font-size:14px">'+esc(q.workbuddy.model||'?')+'</div>'
+      +'<div class="qval">'+fmtNum(t.remaining)+' <small style="font-size:11px;color:#8b949e">/ '+fmtNum(t.size)+'</small></div>'
+      +qbar(used,t.size,p>80?'#f6465d':'#3fb950')
+      +'<div class="qsub">已用 '+p+'%</div>';
+  }
+  function fmtNum(v){if(v==null)return 'n/a';return v.toLocaleString('zh');}
+  const cc=q.claudecode||{};
+  const cx=q.codex||{};
+  const wd=w.ok
+    ?'<div class="weather-main"><div class="weather-ico">'+wIco(w.text)+'</div>'
+      +'<div><div class="weather-temp">'+esc(w.temp)+'<small>°C</small></div>'
+      +'<div style="font-size:13px;color:#8b949e">'+esc(w.text||'')+'</div></div></div>'
+      +'<div class="weather-detail">最高 <b>'+esc(w.high)+'</b>°C · 最低 <b>'+esc(w.low)+'</b>°C · 湿度 <b>'+esc(w.humidity)+'</b>%</div>'
+    :'<div class="qsub">不可用 ('+esc(w.error||'')+')</div>';
+  const stocks=st.map(s=>{
+    const pct=s.changePct==null?'':(s.changePct>0?'+':'')+s.changePct.toFixed(2)+'%';
+    const cls=s.changePct==null?'flat':(s.changePct>=0?'up':'down');
+    const arrow=s.changePct==null?'':(s.changePct>=0?'▲':'▼');
+    return '<div class="stock"><div class="sh"><span class="nm">'+esc(s.label)+'<small>'+esc(s.sym)+'</small></span></div>'
+      +'<div class="pr '+cls+'">'+esc(s.price)+' <small style="font-size:11px;color:#8b949e">'+esc(s.currency)+'</small></div>'
+      +'<div class="pct '+cls+'">'+arrow+' '+pct+'</div>'
+      +'<div class="spark">'+sparkSvg(s.spark&&s.spark.closes)+'</div>'
+      +'<div class="ft">'+(s.spark?s.spark.closes.length+'日走势':'无走势数据')+'</div></div>';
+  }).join('');
+  const fxCards=fx.cny!=null||fx.inr!=null
+    ?'<div class="fx-cards"><div class="fx-card"><div class="fc">USD → CNY 人民币</div><div class="fv up">'+esc(fx.cny)+'</div></div>'
+     +'<div class="fx-card"><div class="fc">USD → INR 卢比</div><div class="fv">'+esc(fx.inr)+'</div></div></div>'
+    :'<div class="qsub">不可用 ('+esc(fx.error||'')+')</div>';
+  const clocks=cl.map(c=>'<div class="clock"><span class="cc">'+esc(c.city)+'</span><span class="ct">'+esc(c.time)+'</span><span class="cd">'+esc(c.date)+'</span></div>').join('');
+  return '<div class="grid quotas">'
+    +'<div class="card"><h2><span class="ico">🤖</span>WorkBuddy 限额</h2>'+wbHtml+'</div>'
+    +'<div class="card"><h2><span class="ico">💻</span>Claude Code 本周</h2>'
+      +'<div class="qval">'+esc(cc.used7d)+' <small style="font-size:11px;color:#8b949e">/ '+esc(cc.cap)+'</small></div>'
+      +qbar(Number(cc.used7d)||0,Number(cc.cap)||0,'#58a6ff')
+      +'<div class="qsub">'+ (cc.ok?'':'本地估算')+'</div></div>'
+    +'<div class="card"><h2><span class="ico">⚡</span>Codex 本周</h2>'
+      +'<div class="qval">'+esc(cx.used7d)+' <small style="font-size:11px;color:#8b949e">/ '+esc(cx.cap)+'</small></div>'
+      +qbar(Number(cx.used7d)||0,Number(cx.cap)||0,'#d29922')
+      +'<div class="qsub">'+ (cx.ok?'':'本地估算')+'</div></div>'
+    +'</div>'
+    +'<div class="stocks-grid">'+stocks+'</div>'
+    +'<div class="grid main">'
+      +'<div class="card"><h2><span class="ico">🌤️</span>天气 · '+esc(w.city||'')+'</h2>'+wd+'</div>'
+      +'<div class="card"><h2><span class="ico">💰</span>汇率 (1 '+esc(fx.base||'USD')+')</h2>'+fxCards+'</div>'
+      +'</div>'
+    +'<div class="grid"><div class="card"><h2><span class="ico">🕐</span>世界时钟</h2><div class="clocks-grid">'+clocks+'</div></div></div>';
+}
+function paint(){
+  const ok=(INIT&&INIT.stocks&&INIT.stocks.items&&INIT.stocks.items.some(s=>s.ok));
+  document.getElementById('meta').innerHTML=
+    '<span>服务正常</span><span class="badge '+(ok?'ok':'err')+'">'+(ok?'LIVE':'ERR')+'</span>'
+    +'<span style="margin-left:8px">更新 '+new Date((INIT&&INIT.serverTime)||Date.now()).toLocaleTimeString()+'</span>'
+    +'<span style="margin-left:8px"><a href="/api/dashboard" style="color:#58a6ff">JSON</a></span>';
+  document.getElementById('app').innerHTML=render(INIT||{});
+}
+async function refresh(){
+  try{const r=await fetch('/api/dashboard',{cache:'no-store'});INIT=await r.json();paint();}
+  catch(e){document.getElementById('meta').innerHTML+='<span class="badge err">刷新失败</span>';}
+}
+paint();
+setInterval(refresh,30000);
+</script>
 </body></html>`;
 }
 

@@ -76,71 +76,104 @@ function KindleDash:fetchDashboard()
 end
 
 -- ---------- 文本渲染 ----------
-local function num(v, d)
+local num = function(v, d)
     if v == nil then return "n/a" end
     if d then return string.format("%." .. d .. "f", v) end
     return tostring(v)
 end
-local function pct(v)
+local pct = function(v)
     if v == nil then return "" end
     return (v > 0 and "+" or "") .. num(v, 1) .. "%"
+end
+
+-- 字符迷你走势图（块字符，e-ink 友好）
+local SPARK_CHARS = { "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" }
+local function sparkline(closes, n)
+    n = n or 12
+    if not closes or #closes < 2 then return "" end
+    local pts = {}
+    local step = #closes / n
+    for i = 1, n do
+        local idx = math.floor((i - 1) * step) + 1
+        if idx > #closes then idx = #closes end
+        pts[i] = closes[idx]
+    end
+    local min, max = pts[1], pts[1]
+    for i = 2, n do
+        if pts[i] < min then min = pts[i] end
+        if pts[i] > max then max = pts[i] end
+    end
+    local span = max - min
+    if span <= 0 then return "" end
+    local s = {}
+    for i = 1, n do
+        local lv = math.floor((pts[i] - min) / span * 8) + 1
+        if lv > 8 then lv = 8 end
+        if lv < 1 then lv = 1 end
+        s[i] = SPARK_CHARS[lv]
+    end
+    return table.concat(s)
 end
 
 function KindleDash:renderText(d)
     local L = {}
     local q = d.quotas or {}
 
-    table.insert(L, "=== 限额 QUOTA ===")
+    table.insert(L, "═══ KINDLE DASH ═══")
     local wb = q.workbuddy or {}
     if wb.ok then
         local t = wb.token or {}
-        table.insert(L, string.format("WorkBuddy  %s", tostring(wb.model or "?")))
-        table.insert(L, string.format("   剩余 %s / %s  (%.1f%%)",
+        table.insert(L, string.format("WorkBuddy %s", tostring(wb.model or "?")))
+        table.insert(L, string.format("  剩余 %s / %s  (%d%%)",
             tostring(t.remaining or "?"), tostring(t.size or "?"), t.percent or 0))
     else
         table.insert(L, "WorkBuddy  不可用 (" .. tostring(wb.error or "") .. ")")
     end
     local cc = q.claudecode or {}
-    table.insert(L, string.format("ClaudeCode  本周 %s / %s%s",
+    table.insert(L, string.format("ClaudeCode 本周 %s / %s%s",
         tostring(cc.used7d or "?"), tostring(cc.cap or "?"),
-        cc.ok and "" or "  (本地统计)"))
+        cc.ok and "" or "  (本地)"))
     local cx = q.codex or {}
-    table.insert(L, string.format("Codex       本周 %s / %s%s",
+    table.insert(L, string.format("Codex      本周 %s / %s%s",
         tostring(cx.used7d or "?"), tostring(cx.cap or "?"),
-        cx.ok and "" or "  (本地统计)"))
+        cx.ok and "" or "  (本地)"))
 
     local w = d.weather or {}
     table.insert(L, "")
-    table.insert(L, "=== 天气 WEATHER ===")
+    table.insert(L, "── 天气 ──")
     if w.ok then
         table.insert(L, string.format("%s  %s %s°C", tostring(w.city or ""),
             tostring(w.text or ""), tostring(w.temp or "?")))
-        table.insert(L, string.format("   高%s / 低%s  湿%s%%",
+        table.insert(L, string.format("  高%s  低%s  湿度%s%%",
             tostring(w.high or "?"), tostring(w.low or "?"), tostring(w.humidity or "?")))
     else
-        table.insert(L, "不可用 (" .. tostring(w.error or "") .. ")")
+        table.insert(L, "  不可用 (" .. tostring(w.error or "") .. ")")
     end
 
     local st = (d.stocks and d.stocks.items) or {}
     table.insert(L, "")
-    table.insert(L, "=== 股市 MARKETS ===")
+    table.insert(L, "── 股市 ──")
     for _, s in ipairs(st) do
         local mkt = s.mkt == "US" and "美" or (s.mkt == "A" and "A" or " ")
         local arrow = s.changePct == nil and "" or (s.changePct >= 0 and "↑" or "↓")
-        table.insert(L, string.format("%s %s[%s] %s %s", mkt, tostring(s.label or s.sym),
-            tostring(s.sym), tostring(s.price or "?"),
-            s.changePct == nil and "" or arrow .. pct(s.changePct)))
+        table.insert(L, string.format("[%s] %s %s  %s%s",
+            mkt, tostring(s.label or s.sym), tostring(s.price or "?"),
+            arrow, s.changePct == nil and "" or pct(s.changePct)))
+        local sp = s.spark
+        if sp and sp.closes and #sp.closes >= 2 then
+            local mini = sparkline(sp.closes, 14)
+            if mini ~= "" then table.insert(L, "    " .. mini) end
+        end
     end
 
     local fx = d.fx or {}
     table.insert(L, "")
-    table.insert(L, "=== 汇率 FX (1 " .. tostring(fx.base or "USD") .. ") ===")
-    table.insert(L, string.format("人民币 CNY  %s", num(fx.cny, 3)))
-    table.insert(L, string.format("卢比   INR  %s", num(fx.inr, 3)))
+    table.insert(L, "── 汇率 (1 " .. tostring(fx.base or "USD") .. ") ──")
+    table.insert(L, string.format("CNY %s    INR %s", num(fx.cny, 3), num(fx.inr, 3)))
 
     local cl = (d.clocks and d.clocks.items) or {}
     table.insert(L, "")
-    table.insert(L, "=== 世界时钟 CLOCKS ===")
+    table.insert(L, "── 世界时钟 ──")
     for _, c in ipairs(cl) do
         table.insert(L, string.format("%s  %s  %s", tostring(c.city),
             tostring(c.time), tostring(c.date)))

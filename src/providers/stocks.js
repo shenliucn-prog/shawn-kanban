@@ -6,18 +6,37 @@ import { config } from '../config.js';
 // pure ASCII, so we split the raw text on '~' without decoding the Chinese name
 // (we use the config label instead).
 //
-// Field layout (US and A-share share it for our purposes):
+// Quote field layout (US and A-share share it for our purposes):
 //   [1]  name            [3]  current price
-//   [4]  previous close  [30] change amount   [31] change percent
+//   [4]  previous close
+// Kline endpoint: https://web.ifzq.gtimg.cn/appstock/app/fqkline/get
+//   param=<code>,day,,,30,qfq
+//   A-share code: sh600519 / sz399001   -> bars in .qfqday
+//   US code:      usAAPL.OQ / usMU.OQ   -> bars in .day
+//   bar layout: [date, open, close, high, low, volume, ...]
 const GTIMG = 'https://qt.gtimg.cn/q=';
+const KLINE = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get';
 
 function toGtimgCode(s) {
   if (s.mkt === 'US') return 'us' + String(s.sym).toUpperCase();
   // A-share: "600519.SS" / "399001.SZ" -> sh600519 / sz399001
   const raw = String(s.sym).toUpperCase();
   const [code, ex] = raw.split('.');
-  const pfx = ex === 'SS' ? 'sh' : ex === 'SZ' ? 'sz' : ex === 'SH' ? 'sh' : ex === 'SZ' ? 'sz' : 'sh';
+  const pfx = ex === 'SZ' ? 'sz' : 'sh';
   return pfx + code;
+}
+
+// Kline symbol differs slightly from the quote symbol: US stocks need an
+// exchange suffix (.OQ = NASDAQ, .N = NYSE). We try .OQ first, then .N.
+function toKlineCode(s) {
+  if (s.mkt === 'US') {
+    const sym = String(s.sym).toUpperCase();
+    return [`us${sym}.OQ`, `us${sym}.N`];
+  }
+  const raw = String(s.sym).toUpperCase();
+  const [code, ex] = raw.split('.');
+  const pfx = ex === 'SZ' ? 'sz' : 'sh';
+  return [`${pfx}${code}`];
 }
 
 function currencyFor(mkt) {
@@ -33,11 +52,63 @@ async function fetchBatch(codes) {
       signal: ctrl.signal,
       headers: { 'User-Agent': 'Mozilla/5.0', Referer: 'https://gu.qq.com/' }
     });
-    const text = await res.text();
-    return text;
+    return await res.text();
   } finally {
     clearTimeout(t);
   }
+}
+
+async function fetchKline(code) {
+  const url = `${KLINE}?param=${code},day,,,30,qfq`;
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 9000);
+  try {
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0' }
+    });
+    const text = await res.text();
+    const j = JSON.parse(text);
+    const node = j && j.data && j.data[code];
+    const bars = (node && (node.qfqday || node.day)) || [];
+    const dates = [];
+    const closes = [];
+    for (const b of bars) {
+      const close = Number(b[2]);
+      if (Number.isFinite(close) && b[0]) {
+        dates.push(String(b[0]));
+        closes.push(close);
+      }
+    }
+    if (closes.length >= 2) return { dates, closes };
+    return null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// Fetch a ~30 trading day close series for every configured stock, in parallel.
+async function getSparks(list) {
+  const results = {};
+  await Promise.all(
+    list.map(async (s) => {
+      const candidates = toKlineCode(s);
+      for (const code of candidates) {
+        const spark = await cached(
+          `kline:${code}`,
+          5 * 60 * 1000,
+          () => fetchKline(code)
+        );
+        if (spark) {
+          results[s.sym] = spark;
+          return;
+        }
+      }
+    })
+  );
+  return results;
 }
 
 export async function getStocks() {
@@ -59,6 +130,8 @@ export async function getStocks() {
     if (!m) continue;
     byCode.set(m[1].toLowerCase(), m[2]);
   }
+
+  const sparks = await getSparks(list);
 
   const items = list.map((s, i) => {
     const code = codes[i].toLowerCase();
@@ -82,7 +155,7 @@ export async function getStocks() {
       change = Math.round((price - prev) * 100) / 100;
       changePct = Math.round(((price - prev) / prev) * 10000) / 100;
     }
-    return {
+    const item = {
       sym: s.sym,
       ok: true,
       name: label,
@@ -94,6 +167,9 @@ export async function getStocks() {
       label,
       mkt: s.mkt
     };
+    const spark = sparks[s.sym];
+    if (spark) item.spark = spark; // { dates: string[], closes: number[] }
+    return item;
   });
 
   return { ok: true, items };
