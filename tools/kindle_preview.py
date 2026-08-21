@@ -146,7 +146,7 @@ def choose_size(d, availW, availH):
         if ok:
             lineH = math.ceil(sz * 1.3)
             titleH = math.ceil((sz + 2) * 1.3)
-            totalH = titleH + total_lines * lineH + len(mods) * 18
+            totalH = titleH + total_lines * lineH + len(mods) * 10
             if totalH <= availH:
                 return sz
     return 18

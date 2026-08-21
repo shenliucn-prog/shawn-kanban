@@ -231,8 +231,8 @@ function KindleDash:chooseSize(data, availW, availH)
         if ok then
             local lineH = math.ceil(sz * 1.3)
             local titleH = math.ceil((sz + 2) * 1.3)
-            -- 每个模块的边框+padding+margin 实际开销 ≈ 18px（border1*2+padding6*2+margin2*2）
-            local totalH = titleH + totalLines * lineH + #mods * 18
+            -- 每个模块边框+padding+margin 实际开销 ≈ 10px（border1*2+padding2*2+margin2*2）
+            local totalH = titleH + totalLines * lineH + #mods * 10
             if totalH <= availH then
                 return sz
             end
@@ -268,11 +268,11 @@ function KindleDash:showDashboard(data)
         TextWidget:new{ text = "SHAWN KANBAN", face = titleFace },
     })
     for _, m in ipairs(mods) do
-        -- 多行文本必须用 TextBoxWidget（TextWidget 只支持单行，多行会尺寸错乱）
-        local tw = TextBoxWidget:new{ text = m.text, face = face, width = w - 2 * pad }
+        -- 多行文本必须用 TextBoxWidget（TextWidget 只支持单行）
+        local tw = TextBoxWidget:new{ text = m.text, face = face, width = w - 4 }
         local frame = FrameContainer:new{
             bordersize = 1,
-            padding = 6,
+            padding = 2,
             margin = 2,
             background = Blitbuffer.COLOR_WHITE,
             tw,

@@ -33,7 +33,7 @@ def check(d, label):
             print(f"    !! 超宽 {w:.0f}px: {line[:44]}")
     # 与 main.lua chooseSize 相同的总高口径（含标题行 + 6 个模块边框开销）
     title_h = math.ceil((sz + 2) * 1.3)
-    total_h_est = title_h + len(lines) * line_h + 6 * 18
+    total_h_est = title_h + len(lines) * line_h + 6 * 10
     margin = avail_h - total_h_est
     ok = (overflow == 0 and margin >= 60)
     print(f"  [{label}] 字号={sz} 行数={len(lines)} 总高(估)={total_h_est}px 可用={avail_h}px 余量={margin}px 超宽={overflow}  -> {'✓ 一屏' if ok else '✗ 需修正'}")
