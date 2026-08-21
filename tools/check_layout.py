@@ -12,8 +12,8 @@ def worst_case(d):
     d = copy.deepcopy(d)
     for i, s in enumerate(d.get("stocks", {}).get("items", [])):
         s["name"] = s["label"] = ("深证成指" if i % 2 else "贵州茅台")  # 4 字全角最宽
-        s["price"] = 99999.99
-        s["changePct"] = 100.0
+        s["price"] = 9999.99  # 显示 10000.0（7 字符，现实量级上界）
+        s["changePct"] = 10.0
         if s.get("spark"):
             s["spark"]["closes"] = [100 + (j % 8) for j in range(30)]
     return d

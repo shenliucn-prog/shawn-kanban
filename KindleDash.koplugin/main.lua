@@ -90,7 +90,7 @@ local num = function(v, d)
 end
 local pct = function(v)
     if v == nil then return "" end
-    return (v > 0 and "+" or "") .. num(v, 1) .. "%"
+    return num(math.abs(v), 1) .. "%" -- 符号由 sign 提供，这里只输出绝对值
 end
 
 -- 中英文混排宽度补空格，让多列对齐（中文按 2 格计）
@@ -103,33 +103,22 @@ local function padText(s, width)
     return s .. string.rep(" ", math.max(0, width - len))
 end
 
--- 字符迷你走势图（块字符，e-ink 友好）
-local SPARK_CHARS = { "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" }
-local function sparkline(closes, n)
-    n = n or 12
-    if not closes or #closes < 2 then return "" end
-    local pts = {}
-    local step = #closes / n
-    for i = 1, n do
-        local idx = math.floor((i - 1) * step) + 1
-        if idx > #closes then idx = #closes end
-        pts[i] = closes[idx]
-    end
-    local min, max = pts[1], pts[1]
-    for i = 2, n do
-        if pts[i] < min then min = pts[i] end
-        if pts[i] > max then max = pts[i] end
-    end
-    local span = max - min
-    if span <= 0 then return "" end
-    local s = {}
-    for i = 1, n do
-        local lv = math.floor((pts[i] - min) / span * 8) + 1
-        if lv > 8 then lv = 8 end
-        if lv < 1 then lv = 1 end
-        s[i] = SPARK_CHARS[lv]
-    end
-    return table.concat(s)
+-- 两列布局：每列宽（单位：半角=1，全角=2），屏幕 758 宽、字号 26 时列宽 27 单位
+local COLW = 27
+local function col2(left, right)
+    return padText(left, COLW) .. " " .. tostring(right or "")
+end
+local function priceText(v)
+    if v == nil then return "?" end
+    return num(v, v >= 1000 and 1 or 2)
+end
+local function stockCell(s)
+    local mkt = s.mkt == "US" and "美" or (s.mkt == "A" and "A" or " ")
+    -- 用半角 +/− 表示方向；前缀用单字 + 空格（[美] 的方括号占格，列宽不够）
+    local sign = s.changePct == nil and "" or (s.changePct >= 0 and "+" or "-")
+    return string.format("%s %s %s %s%s",
+        mkt, tostring(s.label or s.sym), priceText(s.price),
+        sign, s.changePct == nil and "" or pct(s.changePct))
 end
 
 function KindleDash:renderText(d)
@@ -140,61 +129,50 @@ function KindleDash:renderText(d)
     local wb = q.workbuddy or {}
     if wb.ok then
         local t = wb.token or {}
-        table.insert(L, string.format("WorkBuddy %s  剩余%s/%s (%d%%)",
-            tostring(wb.model or "?"),
+        table.insert(L, string.format("WorkBuddy 剩余 %s/%s (%d%%)",
             tostring(t.remaining or "?"), tostring(t.size or "?"), t.percent or 0))
     else
-        table.insert(L, "WorkBuddy  不可用 (" .. tostring(wb.error or "") .. ")")
+        table.insert(L, "WorkBuddy 不可用 (" .. tostring(wb.error or "") .. ")")
     end
     local cc = q.claudecode or {}
-    table.insert(L, string.format("ClaudeCode 本周 %s / %s%s",
-        tostring(cc.used7d or "?"), tostring(cc.cap or "?"),
-        cc.ok and "" or "  (本地)"))
     local cx = q.codex or {}
-    table.insert(L, string.format("Codex      本周 %s / %s%s",
-        tostring(cx.used7d or "?"), tostring(cx.cap or "?"),
-        cx.ok and "" or "  (本地)"))
+    table.insert(L, col2(
+        string.format("ClaudeCode %s/%s", tostring(cc.used7d or "?"), tostring(cc.cap or "?")),
+        string.format("Codex %s/%s", tostring(cx.used7d or "?"), tostring(cx.cap or "?"))))
 
     local w = d.weather or {}
     table.insert(L, "")
-    table.insert(L, "── 天气 · " .. tostring(w.city or "") .. " ──")
     if w.ok then
-        table.insert(L, string.format("%s %s°C  高%s  低%s  湿%s%%",
-            tostring(w.text or ""), tostring(w.temp or "?"),
+        table.insert(L, string.format("天气 · %s  %s %s°C  高%s 低%s 湿%s%%",
+            tostring(w.city or ""), tostring(w.text or ""), tostring(w.temp or "?"),
             tostring(w.high or "?"), tostring(w.low or "?"), tostring(w.humidity or "?")))
     else
-        table.insert(L, "  不可用 (" .. tostring(w.error or "") .. ")")
+        table.insert(L, "天气 不可用 (" .. tostring(w.error or "") .. ")")
     end
 
     local st = (d.stocks and d.stocks.items) or {}
     table.insert(L, "")
     table.insert(L, "── 股市 ──")
-    for _, s in ipairs(st) do
-        local mkt = s.mkt == "US" and "美" or (s.mkt == "A" and "A" or " ")
-        local arrow = s.changePct == nil and "" or (s.changePct >= 0 and "↑" or "↓")
-        local mini = ""
-        local sp = s.spark
-        if sp and sp.closes and #sp.closes >= 2 then
-            mini = " " .. sparkline(sp.closes, 8) -- 走势图并入同一行，避免多占行高
-        end
-        table.insert(L, string.format("[%s] %s %s %s%s%s",
-            mkt, tostring(s.label or s.sym), tostring(s.price or "?"),
-            arrow, s.changePct == nil and "" or pct(s.changePct), mini))
+    for i = 1, #st, 2 do
+        table.insert(L, col2(stockCell(st[i]), st[i + 1] and stockCell(st[i + 1]) or ""))
     end
 
     local fx = d.fx or {}
-    table.insert(L, "── 汇率 (1 " .. tostring(fx.base or "USD") .. ") ──")
-    table.insert(L, string.format("CNY %s    INR %s", num(fx.cny, 3), num(fx.inr, 3)))
+    table.insert(L, "")
+    table.insert(L, "── 汇率 ──")
+    table.insert(L, col2("CNY " .. num(fx.cny, 3), "INR " .. num(fx.inr, 3)))
 
     local cl = (d.clocks and d.clocks.items) or {}
     table.insert(L, "")
-    table.insert(L, "── 世界时钟 ──")
-    for _, c in ipairs(cl) do
-        -- 城市名补宽对齐（中文按 2 格），时间列逐行对齐
-        table.insert(L, string.format("%s %s %s", padText(c.city, 8),
-            tostring(c.time), tostring(c.date)))
+    table.insert(L, "── 时钟 ──")
+    local function clockCell(c)
+        return string.format("%s %s %s", tostring(c.city), tostring(c.time), tostring(c.date))
+    end
+    for i = 1, #cl, 2 do
+        table.insert(L, col2(clockCell(cl[i]), cl[i + 1] and clockCell(cl[i + 1]) or ""))
     end
 
+    table.insert(L, "")
     table.insert(L, "更新 " .. os.date("%H:%M:%S"))
     return table.concat(L, "\n")
 end
@@ -215,7 +193,7 @@ function KindleDash:showDashboard(data)
     -- KOReader 主界面导致"下滑退出"像闪退，这里不再使用它）
     local tw = TextBoxWidget:new{
         text = text,
-        face = Font:getFace("ffont", 24),
+        face = Font:getFace("ffont", 26),
         fgcolor = Blitbuffer.COLOR_BLACK,
         width = w - 2 * pad,
         alignment = "left",

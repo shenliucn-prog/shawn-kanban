@@ -5,7 +5,7 @@
 import json, urllib.request, math, sys
 
 SCREEN_W, SCREEN_H = 758, 1024
-FONT = 24          # main.lua showDashboard 用的字号
+FONT = 26          # main.lua showDashboard 用的字号
 PAD = 16           # frame padding
 LINE_H = int(FONT * 1.18)  # TextBoxWidget 默认行高近似
 CH_FULL, CH_HALF = FONT, FONT // 2   # 全角/半角近似像素宽
@@ -67,6 +67,21 @@ def num(v, d=None):
         return ("%%.%df" % d) % v
     return str(v)
 
+COLW = 27
+def col2(left, right=""):
+    return pad_text(str(left), COLW) + " " + str(right)
+
+def price_text(v):
+    if v is None:
+        return "?"
+    return num(v, 1 if v >= 1000 else 2)
+
+def stock_cell(s):
+    mkt = "美" if s.get("mkt") == "US" else ("A" if s.get("mkt") == "A" else " ")
+    sign = "" if s.get("changePct") is None else ("+" if s.get("changePct") >= 0 else "-")
+    p = "" if s.get("changePct") is None else ("%.1f%%" % abs(s.get("changePct")))
+    return "%s %s %s %s%s" % (mkt, s.get("label", s.get("sym")), price_text(s.get("price")), sign, p)
+
 def render(d):
     L = []
     q = d.get("quotas", {})
@@ -74,39 +89,38 @@ def render(d):
     wb = q.get("workbuddy", {})
     if wb.get("ok"):
         t = wb.get("token", {})
-        L.append("WorkBuddy %s  剩余%s/%s (%d%%)" % (wb.get("model", "?"), t.get("remaining", "?"), t.get("size", "?"), t.get("percent") or 0))
+        L.append("WorkBuddy 剩余 %s/%s (%d%%)" % (t.get("remaining", "?"), t.get("size", "?"), t.get("percent") or 0))
     else:
-        L.append("WorkBuddy  不可用 (%s)" % wb.get("error", ""))
+        L.append("WorkBuddy 不可用 (%s)" % wb.get("error", ""))
     cc = q.get("claudecode", {})
-    L.append("ClaudeCode 本周 %s / %s%s" % (cc.get("used7d", "?"), cc.get("cap", "?"), "" if cc.get("ok") else "  (本地)"))
     cx = q.get("codex", {})
-    L.append("Codex      本周 %s / %s%s" % (cx.get("used7d", "?"), cx.get("cap", "?"), "" if cx.get("ok") else "  (本地)"))
-    L.append("")
+    L.append(col2("ClaudeCode %s/%s" % (cc.get("used7d", "?"), cc.get("cap", "?")),
+                  "Codex %s/%s" % (cx.get("used7d", "?"), cx.get("cap", "?"))))
     w = d.get("weather", {})
-    L.append("── 天气 · %s ──" % w.get("city", ""))
+    L.append("")
     if w.get("ok"):
-        L.append("%s %s°C  高%s  低%s  湿%s%%" % (w.get("text", ""), w.get("temp", "?"), w.get("high", "?"), w.get("low", "?"), w.get("humidity", "?")))
+        L.append("天气 · %s  %s %s°C  高%s 低%s 湿%s%%" % (w.get("city", ""), w.get("text", ""), w.get("temp", "?"), w.get("high", "?"), w.get("low", "?"), w.get("humidity", "?")))
     else:
-        L.append("  不可用 (%s)" % w.get("error", ""))
+        L.append("天气 不可用 (%s)" % w.get("error", ""))
+    st = d.get("stocks", {}).get("items", [])
     L.append("")
     L.append("── 股市 ──")
-    for s in d.get("stocks", {}).get("items", []):
-        mkt = "美" if s.get("mkt") == "US" else ("A" if s.get("mkt") == "A" else " ")
-        arrow = "" if s.get("changePct") is None else ("↑" if s.get("changePct") >= 0 else "↓")
-        pct = "" if s.get("changePct") is None else ("%+.1f%%" % s.get("changePct"))
-        mini = ""
-        sp = s.get("spark")
-        if sp and sp.get("closes") and len(sp["closes"]) >= 2:
-            mini = " " + sparkline(sp["closes"], 8)
-        L.append("[%s] %s %s %s%s%s" % (mkt, s.get("label", s.get("sym")), s.get("price", "?"), arrow, pct, mini))
+    for i in range(0, len(st), 2):
+        L.append(col2(stock_cell(st[i]), stock_cell(st[i + 1]) if i + 1 < len(st) else ""))
     fx = d.get("fx", {})
-    L.append("── 汇率 (1 %s) ──" % fx.get("base", "USD"))
-    L.append("CNY %s    INR %s" % (num(fx.get("cny"), 3), num(fx.get("inr"), 3)))
     L.append("")
-    L.append("── 世界时钟 ──")
-    for c in d.get("clocks", {}).get("items", []):
-        L.append("%s %s %s" % (pad_text(c.get("city", ""), 8), c.get("time"), c.get("date")))
-    L.append("更新 23:34:00")
+    L.append("── 汇率 ──")
+    L.append(col2("CNY " + num(fx.get("cny"), 3), "INR " + num(fx.get("inr"), 3)))
+    cl = d.get("clocks", {}).get("items", [])
+    L.append("")
+    L.append("── 时钟 ──")
+    for i in range(0, len(cl), 2):
+        lc = cl[i]
+        rc = cl[i + 1] if i + 1 < len(cl) else None
+        L.append(col2("%s %s %s" % (lc.get("city"), lc.get("time"), lc.get("date")),
+                      "%s %s %s" % (rc.get("city"), rc.get("time"), rc.get("date")) if rc else ""))
+    L.append("")
+    L.append("更新 23:59:00")
     return L
 
 def main():
