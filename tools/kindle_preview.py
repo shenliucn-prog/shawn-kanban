@@ -1,11 +1,18 @@
 # -*- coding: utf-8 -*-
-"""模拟 Kindle PW3 (KOReader kindlepw2, 逻辑分辨率 758x1024) 渲染 Shawn Kanban 看板。
-复刻 KindleDash.koplugin/main.lua 的 renderText 逻辑，检查排版是否溢出/超宽。
+"""模拟 Kindle PW3 实际渲染（从用户照片反推的真实参数）。
+
+关键发现（2026-08-22 由照片精确测量得出）：
+- KOReader self.ui.dimen 在 PW3 上 = 物理像素 1072×1448（不是 758×1024）
+- Font:getFace(size) 的 size 在 ffont 上 = 物理像素（行高 = size × 1.3）
+- 字号 26 → 物理行高 ≈ 34px，照片实测 28-31px（接近，含边界）
+复刻 KindleDash.koplugin/main.lua 布局，检查排版是否溢出/超宽。
 """
 import json, urllib.request, math, sys
 
-SCREEN_W, SCREEN_H = 758, 1024
-PAD = 12           # frame padding（main.lua showDashboard）
+SCREEN_W, SCREEN_H = 1072, 1448  # PW3 物理像素（KOReader self.ui.dimen）
+FONT = 26          # main.lua 字号（PW3 上 ≈ 物理像素）
+PAD = 12           # 屏外边距
+LINE_H = int(FONT * 1.3)  # TextBoxWidget 行高（line_height=0.3→1.3×字号）
 
 def pad_text(s, width):
     s = str(s)
