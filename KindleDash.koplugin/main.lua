@@ -259,7 +259,7 @@ function KindleDash:showDashboard(data)
 
     -- 垂直堆叠：标题 + 各线框模块
     local vg = VerticalGroup:new{ align = "left" }
-    vg:addWidget(FrameContainer:new{
+    table.insert(vg, FrameContainer:new{
         bordersize = 0,
         padding = 2,
         margin = 0,
@@ -275,10 +275,10 @@ function KindleDash:showDashboard(data)
             background = Blitbuffer.COLOR_WHITE,
             tw,
         }
-        vg:addWidget(frame)
+        table.insert(vg, frame)
     end
 
-    -- 全屏白底 + 内容垂直居中
+    -- 全屏白底 + 内容垂直居中（尺寸由 center=全屏 决定，无需给 FrameContainer 设 dimen）
     local center = CenterContainer:new{
         dimen = Geom:new{ w = w, h = h },
         vg,
@@ -286,7 +286,6 @@ function KindleDash:showDashboard(data)
     local bg = FrameContainer:new{
         bordersize = 0,
         padding = 0,
-        dimen = Geom:new{ w = w, h = h },
         background = Blitbuffer.COLOR_WHITE,
         center,
     }
