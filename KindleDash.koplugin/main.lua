@@ -5,7 +5,7 @@ local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local UIManager = require("ui/uimanager")
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
-local ScrollTextWidget = require("ui/widget/scrolltextwidget")
+local TextBoxWidget = require("ui/widget/textboxwidget")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local GestureRange = require("ui/gesturerange")
@@ -172,14 +172,14 @@ function KindleDash:renderText(d)
     for _, s in ipairs(st) do
         local mkt = s.mkt == "US" and "美" or (s.mkt == "A" and "A" or " ")
         local arrow = s.changePct == nil and "" or (s.changePct >= 0 and "↑" or "↓")
-        table.insert(L, string.format("[%s] %s %s  %s%s",
-            mkt, tostring(s.label or s.sym), tostring(s.price or "?"),
-            arrow, s.changePct == nil and "" or pct(s.changePct)))
+        local mini = ""
         local sp = s.spark
         if sp and sp.closes and #sp.closes >= 2 then
-            local mini = sparkline(sp.closes, 8)
-            if mini ~= "" then table.insert(L, "  30日 " .. mini) end
+            mini = " " .. sparkline(sp.closes, 8) -- 走势图并入同一行，避免多占行高
         end
+        table.insert(L, string.format("[%s] %s %s %s%s%s",
+            mkt, tostring(s.label or s.sym), tostring(s.price or "?"),
+            arrow, s.changePct == nil and "" or pct(s.changePct), mini))
     end
 
     local fx = d.fx or {}
@@ -199,7 +199,7 @@ function KindleDash:renderText(d)
     return table.concat(L, "\n")
 end
 
--- ---------- 展示（全屏无按钮栏；点击左右翻页，返回键关闭） ----------
+-- ---------- 展示（全屏无按钮栏；一屏不滚动；手势全部吃掉防退出，返回键关闭） ----------
 function KindleDash:showDashboard(data)
     local text = self:renderText(data)
     if self.dash_widget then
@@ -211,18 +211,20 @@ function KindleDash:showDashboard(data)
     local h = scr and scr.h or 800
     local pad = 16
 
-    local stw = ScrollTextWidget:new{
+    -- TextBoxWidget 自动按宽换行、无滚动手势（ScrollTextWidget 会把滑动穿透给
+    -- KOReader 主界面导致"下滑退出"像闪退，这里不再使用它）
+    local tw = TextBoxWidget:new{
         text = text,
-        face = Font:getFace("ffont", 22),
+        face = Font:getFace("ffont", 24),
         fgcolor = Blitbuffer.COLOR_BLACK,
         width = w - 2 * pad,
-        height = h - 2 * pad,
+        alignment = "left",
     }
     local frame = FrameContainer:new{
         bordersize = 0,
         padding = pad,
         background = Blitbuffer.COLOR_WHITE,
-        stw,
+        tw,
     }
     local container = InputContainer:new{
         dimen = Geom:new{ w = w, h = h },
@@ -232,23 +234,16 @@ function KindleDash:showDashboard(data)
         TapScroll = {
             GestureRange:new{ ges = "tap", range = function() return container.dimen end },
         },
-        -- 必须吃下滑动事件，否则会穿透到 KOReader 主界面触发"下滑退出"（像闪退）
+        -- 滑动必须整包吃掉并返回 true，否则穿透到 KOReader 主界面触发退出
         SwipeScroll = {
             GestureRange:new{ ges = "swipe", range = function() return container.dimen end },
         },
     }
-    function container:onTapScroll(_, ges)
-        if ges.pos.x < w / 2 then
-            stw:onScrollUp()
-        else
-            stw:onScrollDown()
-        end
-        return true
+    function container:onTapScroll()
+        return true -- 吃掉 tap，防穿透
     end
-    function container:onSwipeScroll(_, ges)
-        -- 上下滑动翻页；左右滑动也吃掉，防止穿透
-        stw:onScrollText(nil, ges)
-        return true
+    function container:onSwipeScroll()
+        return true -- 吃掉 swipe，防穿透；一屏显示无需翻页
     end
     function container:onClose()
         UIManager:close(self)

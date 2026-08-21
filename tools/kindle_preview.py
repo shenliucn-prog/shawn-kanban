@@ -5,7 +5,7 @@
 import json, urllib.request, math, sys
 
 SCREEN_W, SCREEN_H = 758, 1024
-FONT = 22          # main.lua showDashboard 用的字号
+FONT = 24          # main.lua showDashboard 用的字号
 PAD = 16           # frame padding
 LINE_H = int(FONT * 1.18)  # TextBoxWidget 默认行高近似
 CH_FULL, CH_HALF = FONT, FONT // 2   # 全角/半角近似像素宽
@@ -94,12 +94,11 @@ def render(d):
         mkt = "美" if s.get("mkt") == "US" else ("A" if s.get("mkt") == "A" else " ")
         arrow = "" if s.get("changePct") is None else ("↑" if s.get("changePct") >= 0 else "↓")
         pct = "" if s.get("changePct") is None else ("%+.1f%%" % s.get("changePct"))
-        L.append("[%s] %s %s  %s%s" % (mkt, s.get("label", s.get("sym")), s.get("price", "?"), arrow, pct))
+        mini = ""
         sp = s.get("spark")
         if sp and sp.get("closes") and len(sp["closes"]) >= 2:
-            mini = sparkline(sp["closes"], 8)
-            if mini:
-                L.append("  30日 " + mini)
+            mini = " " + sparkline(sp["closes"], 8)
+        L.append("[%s] %s %s %s%s%s" % (mkt, s.get("label", s.get("sym")), s.get("price", "?"), arrow, pct, mini))
     fx = d.get("fx", {})
     L.append("── 汇率 (1 %s) ──" % fx.get("base", "USD"))
     L.append("CNY %s    INR %s" % (num(fx.get("cny"), 3), num(fx.get("inr"), 3)))
