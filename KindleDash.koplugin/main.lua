@@ -232,6 +232,10 @@ function KindleDash:showDashboard(data)
         TapScroll = {
             GestureRange:new{ ges = "tap", range = function() return container.dimen end },
         },
+        -- 必须吃下滑动事件，否则会穿透到 KOReader 主界面触发"下滑退出"（像闪退）
+        SwipeScroll = {
+            GestureRange:new{ ges = "swipe", range = function() return container.dimen end },
+        },
     }
     function container:onTapScroll(_, ges)
         if ges.pos.x < w / 2 then
@@ -239,6 +243,11 @@ function KindleDash:showDashboard(data)
         else
             stw:onScrollDown()
         end
+        return true
+    end
+    function container:onSwipeScroll(_, ges)
+        -- 上下滑动翻页；左右滑动也吃掉，防止穿透
+        stw:onScrollText(nil, ges)
         return true
     end
     function container:onClose()
