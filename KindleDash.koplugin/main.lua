@@ -16,6 +16,7 @@ local CenterContainer = require("ui/widget/container/centercontainer")
 local GestureRange = require("ui/gesturerange")
 local Geom = require("ui/geometry")
 local Font = require("ui/font")
+local Screen = require("device").screen  -- 用于 scaleBySize（face.size 物理 = scaleBySize(逻辑)）
 local Blitbuffer = require("ffi/blitbuffer")
 local LuaSettings = require("luasettings")
 local DataStorage = require("datastorage")
@@ -23,13 +24,13 @@ local http = require("socket.http")
 local json = require("json")
 local logger = require("logger")
 
-local REFRESH_SEC = 30 * 60 -- 自动刷新间隔：30 分钟
+local REFRESH_SEC = 30 * 60
 local DEFAULT_HOST = "192.168.31.188"
 local DEFAULT_PORT = "8787"
--- 字号候选（从大到小）。实测 face.size=26 在 ffont 上渲染半角 advance≈19 物理，
--- fullw 行 ≈ 1060 物理，恰好等于屏宽 1072-12 踩边界换行。
--- 改用 24（半角 advance≈17.5，fullw≈962 物理），width=1022 留余量，frame 屏内。
-local SIZES = { 24, 22, 20, 18, 16 }
+-- 字号候选（逻辑像素，Font:getFace 内部会 Screen:scaleBySize 缩放为物理）。
+-- PW3 scaleBySize 系数 ≈ 1.416（size_scale 1.787 + dpi_override 167/160 1.044）/2。
+-- 实测 face.size=22 → 物理 31px，half=15.5，fullw(67单位)≈1038 < width 1050 ✓
+local SIZES = { 22, 20, 18, 16 }
 
 local KindleDash = WidgetContainer:new{
     name = "KindleDash",
@@ -214,20 +215,23 @@ function KindleDash:buildModuleTexts(d)
     }
 end
 
--- 选择字号：从大到小试，直到 ①所有行宽 ≤ 可用宽 ②模块总高 ≤ 可用高
+-- 选择字号：从大到小试，直到 ①所有行物理宽 ≤ TextBoxWidget width ②模块总高 ≤ 可用高
+-- 关键：Font:getFace(size) 内部 Screen:scaleBySize(size) → 物理 size = 逻辑 × ~1.416
+-- colw/textWidth 必须用物理 half，否则 fullw 物理远超估算导致强制换行
 function KindleDash:chooseSize(data, availW, availH)
+    local tbw = self.ui.dimen.w - 22  -- TextBoxWidget width（物理），屏 1072-22=1050
     for _, sz in ipairs(SIZES) do
-        local half = math.max(1, math.floor(sz / 2))
-        -- colw 留出 2×half 物理像素余量，确保 fullw 行渲染宽严格 < width
-        self.colw = math.floor((availW - 2 * half) / 2 / half)
-        -- TextBoxWidget width 给足余量（屏 1072 - 50 = 1022）
-        local tbw = self.ui.dimen.w - 50
+        local physSz = Screen:scaleBySize(sz)  -- 逻辑→物理
+        local physHalf = physSz / 2
+        -- colw 单位使 fullw 物理 = (2*colw+1)*physHalf < tbw
+        self.colw = math.floor((tbw - physHalf) / (2 * physHalf))
         local mods = self:buildModuleTexts(data)
         local ok, totalLines = true, 0
         for _, m in ipairs(mods) do
             for line in (m.text or ""):gmatch("[^\n]+") do
                 totalLines = totalLines + 1
-                if textWidth(line, sz) > tbw then
+                -- textWidth 用物理 sz 算（与渲染一致）
+                if textWidth(line, physSz) > tbw then
                     ok = false
                     break
                 end
@@ -235,9 +239,8 @@ function KindleDash:chooseSize(data, availW, availH)
             if not ok then break end
         end
         if ok then
-            local lineH = math.ceil(sz * 1.3)
-            local titleH = math.ceil((sz + 2) * 1.3)
-            -- 每个模块边框+padding+margin 实际开销 ≈ 10px（border1*2+padding2*2+margin2*2）
+            local lineH = math.ceil(physSz * 1.3)  -- 物理行高
+            local titleH = math.ceil(Screen:scaleBySize(sz + 2) * 1.3)
             local totalH = titleH + totalLines * lineH + #mods * 10
             if totalH <= availH then
                 return sz
@@ -275,9 +278,8 @@ function KindleDash:showDashboard(data)
     })
         for _, m in ipairs(mods) do
         -- 多行文本必须用 TextBoxWidget（TextWidget 只支持单行）
-        -- width = 屏宽 1072 - 50 = 1022，给足 advance 余量防强制换行
-        -- 真实 fullw 渲染宽（face.size=24, advance≈17.5）= (2*colw+1)*17.5 ≈ 962 << 1022 ✓
-        local tw = TextBoxWidget:new{ text = m.text, face = face, width = w - 50 }
+        -- width = 屏宽 - 22 = 1050 物理，给 advance 余量防强制换行
+        local tw = TextBoxWidget:new{ text = m.text, face = face, width = w - 22 }
         local frame = FrameContainer:new{
             bordersize = 1,
             padding = 2,

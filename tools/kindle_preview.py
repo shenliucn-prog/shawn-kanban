@@ -135,25 +135,28 @@ def build_modules(d, colw):
         module_text("更新", upd),
     ]
 
+SCALE = 1.416  # PW3 Screen:scaleBySize 系数（size_scale 1.787 + dpi_override 1.044）/2
+
 def choose_size(d, availW, availH):
-    """复刻 main.lua chooseSize。SIZES 起始 24（face.size 26 在 ffont 上 advance 太大踩边界换行）。"""
-    tbw = SCREEN_W - 50
-    for sz in (24, 22, 20, 18, 16):
-        half = max(1, sz // 2)
-        colw = int((availW - 2 * half) / 2 / half)
+    """复刻 main.lua chooseSize。physSz = sz × 1.416（scaleBySize），colw 用物理 half。"""
+    tbw = SCREEN_W - 22  # 1050 物理
+    for sz in (22, 20, 18, 16):
+        phys_sz = math.ceil(sz * SCALE)
+        phys_half = phys_sz / 2
+        colw = int((tbw - phys_half) / (2 * phys_half))
         mods = build_modules(d, colw)
         ok, total_lines = True, 0
         for m in mods:
             for line in m.split("\n"):
                 total_lines += 1
-                if wc_for(sz, line) > tbw:
+                if wc_for(phys_sz, line) > tbw:
                     ok = False
                     break
             if not ok:
                 break
         if ok:
-            lineH = math.ceil(sz * 1.3)
-            titleH = math.ceil((sz + 2) * 1.3)
+            lineH = math.ceil(phys_sz * 1.3)
+            titleH = math.ceil(math.ceil((sz + 2) * SCALE) * 1.3)
             totalH = titleH + total_lines * lineH + len(mods) * 10
             if totalH <= availH:
                 return sz
