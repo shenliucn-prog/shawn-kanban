@@ -8,6 +8,7 @@ local UIManager = require("ui/uimanager")
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
 local TextWidget = require("ui/widget/textwidget")
+local TextBoxWidget = require("ui/widget/textboxwidget")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local VerticalGroup = require("ui/widget/verticalgroup")
@@ -267,7 +268,8 @@ function KindleDash:showDashboard(data)
         TextWidget:new{ text = "SHAWN KANBAN", face = titleFace },
     })
     for _, m in ipairs(mods) do
-        local tw = TextWidget:new{ text = m.text, face = face }
+        -- 多行文本必须用 TextBoxWidget（TextWidget 只支持单行，多行会尺寸错乱）
+        local tw = TextBoxWidget:new{ text = m.text, face = face, width = w - 2 * pad }
         local frame = FrameContainer:new{
             bordersize = 1,
             padding = 6,
