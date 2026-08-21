@@ -136,11 +136,11 @@ def build_modules(d, colw):
     ]
 
 def choose_size(d, availW, availH):
-    """复刻 main.lua chooseSize。tbw = 屏宽-12（TextBoxWidget width），colw 预留 10 物理像素余量。"""
-    tbw = SCREEN_W - 12
-    for sz in (26, 24, 22, 20, 18):
+    """复刻 main.lua chooseSize。SIZES 起始 24（face.size 26 在 ffont 上 advance 太大踩边界换行）。"""
+    tbw = SCREEN_W - 50
+    for sz in (24, 22, 20, 18, 16):
         half = max(1, sz // 2)
-        colw = int((availW - 10) / 2 / half)
+        colw = int((availW - 2 * half) / 2 / half)
         mods = build_modules(d, colw)
         ok, total_lines = True, 0
         for m in mods:
@@ -157,7 +157,7 @@ def choose_size(d, availW, availH):
             totalH = titleH + total_lines * lineH + len(mods) * 10
             if totalH <= availH:
                 return sz
-    return 18
+    return 16
 
 def render(d):
     """返回 (lines, sz, colw)。lines 为所有模块的所有行。"""

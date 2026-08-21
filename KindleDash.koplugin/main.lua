@@ -26,7 +26,10 @@ local logger = require("logger")
 local REFRESH_SEC = 30 * 60 -- 自动刷新间隔：30 分钟
 local DEFAULT_HOST = "192.168.31.188"
 local DEFAULT_PORT = "8787"
-local SIZES = { 26, 24, 22, 20, 18 } -- 候选字号，从大到小，超宽自动降
+-- 字号候选（从大到小）。实测 face.size=26 在 ffont 上渲染半角 advance≈19 物理，
+-- fullw 行 ≈ 1060 物理，恰好等于屏宽 1072-12 踩边界换行。
+-- 改用 24（半角 advance≈17.5，fullw≈962 物理），width=1022 留余量，frame 屏内。
+local SIZES = { 24, 22, 20, 18, 16 }
 
 local KindleDash = WidgetContainer:new{
     name = "KindleDash",
@@ -215,10 +218,10 @@ end
 function KindleDash:chooseSize(data, availW, availH)
     for _, sz in ipairs(SIZES) do
         local half = math.max(1, math.floor(sz / 2))
-        -- TextBoxWidget width 给足余量（fullw 像素 ≈ availW+half，留 30 像素防 advance 换行）
-        local tbw = self.ui.dimen.w - 12
-        -- colw 预留 5 物理像素余量；右列起点 ≈ 中线偏左几像素
-        self.colw = math.floor((availW - 10) / 2 / half)
+        -- colw 留出 2×half 物理像素余量，确保 fullw 行渲染宽严格 < width
+        self.colw = math.floor((availW - 2 * half) / 2 / half)
+        -- TextBoxWidget width 给足余量（屏 1072 - 50 = 1022）
+        local tbw = self.ui.dimen.w - 50
         local mods = self:buildModuleTexts(data)
         local ok, totalLines = true, 0
         for _, m in ipairs(mods) do
@@ -270,10 +273,11 @@ function KindleDash:showDashboard(data)
         background = Blitbuffer.COLOR_WHITE,
         TextWidget:new{ text = "SHAWN KANBAN", face = titleFace },
     })
-    for _, m in ipairs(mods) do
+        for _, m in ipairs(mods) do
         -- 多行文本必须用 TextBoxWidget（TextWidget 只支持单行）
-        -- width = 屏宽 - 12 物理像素，给 advance 余量防强制换行
-        local tw = TextBoxWidget:new{ text = m.text, face = face, width = w - 12 }
+        -- width = 屏宽 1072 - 50 = 1022，给足 advance 余量防强制换行
+        -- 真实 fullw 渲染宽（face.size=24, advance≈17.5）= (2*colw+1)*17.5 ≈ 962 << 1022 ✓
+        local tw = TextBoxWidget:new{ text = m.text, face = face, width = w - 50 }
         local frame = FrameContainer:new{
             bordersize = 1,
             padding = 2,
