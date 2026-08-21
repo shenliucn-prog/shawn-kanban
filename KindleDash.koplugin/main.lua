@@ -215,13 +215,16 @@ end
 function KindleDash:chooseSize(data, availW, availH)
     for _, sz in ipairs(SIZES) do
         local half = math.max(1, math.floor(sz / 2))
-        self.colw = math.floor((availW - half) / 2 / half)
+        -- TextBoxWidget width 给足余量（fullw 像素 ≈ availW+half，留 30 像素防 advance 换行）
+        local tbw = self.ui.dimen.w - 12
+        -- colw 预留 5 物理像素余量；右列起点 ≈ 中线偏左几像素
+        self.colw = math.floor((availW - 10) / 2 / half)
         local mods = self:buildModuleTexts(data)
         local ok, totalLines = true, 0
         for _, m in ipairs(mods) do
             for line in (m.text or ""):gmatch("[^\n]+") do
                 totalLines = totalLines + 1
-                if textWidth(line, sz) > availW then
+                if textWidth(line, sz) > tbw then
                     ok = false
                     break
                 end
@@ -269,7 +272,8 @@ function KindleDash:showDashboard(data)
     })
     for _, m in ipairs(mods) do
         -- 多行文本必须用 TextBoxWidget（TextWidget 只支持单行）
-        local tw = TextBoxWidget:new{ text = m.text, face = face, width = w - 4 }
+        -- width = 屏宽 - 12 物理像素，给 advance 余量防强制换行
+        local tw = TextBoxWidget:new{ text = m.text, face = face, width = w - 12 }
         local frame = FrameContainer:new{
             bordersize = 1,
             padding = 2,

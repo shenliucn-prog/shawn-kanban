@@ -136,16 +136,17 @@ def build_modules(d, colw):
     ]
 
 def choose_size(d, availW, availH):
-    """复刻 main.lua chooseSize：从 26 往下选，直到 行宽≤availW 且 总高≤availH。"""
+    """复刻 main.lua chooseSize。tbw = 屏宽-12（TextBoxWidget width），colw 预留 10 物理像素余量。"""
+    tbw = SCREEN_W - 12
     for sz in (26, 24, 22, 20, 18):
         half = max(1, sz // 2)
-        colw = int((availW - half) / 2 / half)
+        colw = int((availW - 10) / 2 / half)
         mods = build_modules(d, colw)
         ok, total_lines = True, 0
         for m in mods:
             for line in m.split("\n"):
                 total_lines += 1
-                if wc_for(sz, line) > availW:
+                if wc_for(sz, line) > tbw:
                     ok = False
                     break
             if not ok:
