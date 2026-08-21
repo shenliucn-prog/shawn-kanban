@@ -2,73 +2,33 @@
 """模拟 Kindle PW3 实际渲染（从用户照片反推的真实参数）。
 
 关键发现（2026-08-22 由照片精确测量得出）：
-- KOReader self.ui.dimen 在 PW3 上 = 物理像素 1072×1448（不是 758×1024）
-- Font:getFace(size) 的 size 在 ffont 上 = 物理像素（行高 = size × 1.3）
-- 字号 26 → 物理行高 ≈ 34px，照片实测 28-31px（接近，含边界）
+- KOReader self.ui.dimen 在 PW3 上 = 物理像素 1072×1448
+- Font:getFace(size) 内部 Screen:scaleBySize(size)，系数 ≈1.416
+- 实际物理字号 = 逻辑字号 × 1.416；行高 = 物理字号 × 1.3
 复刻 KindleDash.koplugin/main.lua 布局，检查排版是否溢出/超宽。
 """
 import json, urllib.request, math, sys
 
-SCREEN_W, SCREEN_H = 1072, 1448  # PW3 物理像素（KOReader self.ui.dimen）
-FONT = 26          # main.lua 字号（PW3 上 ≈ 物理像素）
-PAD = 12           # 屏外边距
-LINE_H = int(FONT * 1.3)  # TextBoxWidget 行高（line_height=0.3→1.3×字号）
-
-def pad_text(s, width):
-    s = str(s)
-    return s + " " * max(0, width - len_units(s))
-
-def len_units(s):
-    n = 0
-    for ch in s:
-        o = ord(ch)
-        if o < 128:
-            n += 1
-        else:
-            n += 2
-    return n
-
-def sparkline(closes, n=8):
-    if not closes or len(closes) < 2:
-        return ""
-    pts = []
-    step = len(closes) / n
-    for i in range(1, n + 1):
-        idx = min(int(math.floor((i - 1) * step)) , len(closes) - 1)
-        pts.append(closes[idx])
-    lo, hi = min(pts), max(pts)
-    span = hi - lo
-    if span <= 0:
-        return ""
-    out = []
-    for v in pts:
-        lv = int((v - lo) / span * 8) + 1
-        lv = max(1, min(8, lv))
-        out.append(SPARK[lv - 1])
-    return "".join(out)
+SCREEN_W, SCREEN_H = 1072, 1448  # PW3 物理像素
+PAD = 8                            # 屏外边距（与 main.lua showDashboard pad 一致）
+SCALE = 1.416                      # Screen:scaleBySize 系数
+SIZES = (30, 28, 26, 24, 22, 20, 18, 16)
 
 def num(v, d=None):
-    if v is None:
-        return "n/a"
-    if d is not None:
-        return ("%%.%df" % d) % v
+    if v is None: return "n/a"
+    if d is not None: return ("%%.%df" % d) % v
     return str(v)
 
-def wc_for(sz, s):
-    """按字号 sz 估算像素宽：CJK/全角=sz，ASCII/半角=sz/2（对应 main.lua textWidth）。"""
+def wc_for(phys_sz, s):
+    """按物理字号 phys_sz 估算像素宽：CJK=phys_sz，ASCII=phys_sz/2（对应 main.lua textWidth）。"""
     w = 0
-    half = sz / 2.0
+    half = phys_sz / 2.0
     for ch in s:
-        o = ord(ch)
-        if o < 128:
-            w += half
-        else:
-            w += sz
+        w += half if ord(ch) < 128 else phys_sz
     return w
 
 def price_text(v):
-    if v is None:
-        return "?"
+    if v is None: return "?"
     return num(v, 1 if v >= 1000 else 2)
 
 def stock_cell(s):
@@ -80,14 +40,11 @@ def stock_cell(s):
 def clock_cell(c):
     return "%s %s %s" % (c.get("city"), c.get("time"), c.get("date"))
 
-def build_modules(d, colw):
-    """复刻 main.lua buildModuleTexts，返回 [模块完整文本(含标题行), ...]。"""
-    fullw = 2 * colw + 1
-    def col2full(left, right=""):
-        return pad_text(str(left), colw) + " " + pad_text(str(right), colw)
-    def module_text(title, lines):
-        return "\n".join([pad_text(title, fullw)] + lines)
+def single(text): return {"kind": "single", "text": text}
+def double(left, right=""): return {"kind": "double", "left": left, "right": right}
 
+def build_modules(d):
+    """复刻 main.lua buildModules，返回结构化模块数据 [{title, lines}, ...]。"""
     q = d.get("quotas", {})
     w = d.get("weather", {})
     st = d.get("stocks", {}).get("items", [])
@@ -98,109 +55,118 @@ def build_modules(d, colw):
     wb = q.get("workbuddy", {})
     if wb.get("ok"):
         t = wb.get("token", {})
-        tok.append(pad_text("WorkBuddy %s/%s (%d%%)" % (t.get("remaining", "?"), t.get("size", "?"), t.get("percent") or 0), fullw))
+        tok.append(single("WorkBuddy %s/%s (%d%%)" % (t.get("remaining", "?"), t.get("size", "?"), t.get("percent") or 0)))
     else:
-        tok.append(pad_text("WorkBuddy 不可用", fullw))
+        tok.append(single("WorkBuddy 不可用"))
     cc = q.get("claudecode", {})
     cx = q.get("codex", {})
-    tok.append(col2full("ClaudeCode %s/%s" % (cc.get("used7d", "?"), cc.get("cap", "?")),
-                        "Codex %s/%s" % (cx.get("used7d", "?"), cx.get("cap", "?"))))
+    tok.append(double("ClaudeCode %s/%s" % (cc.get("used7d", "?"), cc.get("cap", "?")),
+                      "Codex %s/%s" % (cx.get("used7d", "?"), cx.get("cap", "?"))))
 
     wea = []
     if w.get("ok"):
-        wea.append(pad_text("天气 · %s  %s %s°C  高%s 低%s 湿%s%%" % (w.get("city", ""), w.get("text", ""), w.get("temp", "?"), w.get("high", "?"), w.get("low", "?"), w.get("humidity", "?")), fullw))
+        wea.append(single("%s  %s %s°C  高%s 低%s 湿%s%%" % (
+            w.get("city", ""), w.get("text", ""), w.get("temp", "?"),
+            w.get("high", "?"), w.get("low", "?"), w.get("humidity", "?"))))
     else:
-        wea.append(pad_text("天气 不可用", fullw))
+        wea.append(single("天气 不可用"))
 
     stk = []
     for i in range(0, len(st), 2):
-        stk.append(col2full(stock_cell(st[i]), stock_cell(st[i + 1]) if i + 1 < len(st) else ""))
+        stk.append(double(stock_cell(st[i]), stock_cell(st[i + 1]) if i + 1 < len(st) else ""))
 
-    fxx = [col2full("CNY " + num(fx.get("cny"), 3), "INR " + num(fx.get("inr"), 3))]
+    fxx = [double("CNY " + num(fx.get("cny"), 3), "INR " + num(fx.get("inr"), 3))]
 
     clk = []
     for i in range(0, len(cl), 2):
-        lc = cl[i]
-        rc = cl[i + 1] if i + 1 < len(cl) else None
-        clk.append(col2full(clock_cell(lc), clock_cell(rc) if rc else ""))
+        clk.append(double(clock_cell(cl[i]), clock_cell(cl[i + 1]) if i + 1 < len(cl) else ""))
 
-    upd = [pad_text("更新 00:05:00", fullw)]
+    upd = [single("更新 00:05:00  顶部下滑返回")]
 
     return [
-        module_text("TOKEN USAGE", tok),
-        module_text("天气", wea),
-        module_text("股市", stk),
-        module_text("汇率", fxx),
-        module_text("时钟", clk),
-        module_text("更新", upd),
+        {"title": "Token Usage", "lines": tok},
+        {"title": "天气",        "lines": wea},
+        {"title": "股市",        "lines": stk},
+        {"title": "汇率",        "lines": fxx},
+        {"title": "时钟",        "lines": clk},
+        {"title": "更新",        "lines": upd},
     ]
 
-SCALE = 1.416  # PW3 Screen:scaleBySize 系数（size_scale 1.787 + dpi_override 1.044）/2
-
 def choose_size(d, availW, availH):
-    """复刻 main.lua chooseSize。physSz = sz × 1.416（scaleBySize），colw 用物理 half。"""
-    tbw = SCREEN_W - 22  # 1050 物理
-    for sz in (22, 20, 18, 16):
+    """复刻 main.lua chooseSize：从大到小试，对 single 检查 tbw，对 double 检查 colwW（严格中线对齐）。"""
+    gap = 4
+    tbw = availW - 4
+    colwW = (availW - gap) // 2
+    for sz in SIZES:
         phys_sz = math.ceil(sz * SCALE)
-        phys_half = phys_sz / 2
-        colw = int((tbw - phys_half) / (2 * phys_half))
-        mods = build_modules(d, colw)
+        title_phys_sz = math.ceil((sz + 2) * SCALE)
+        mods = build_modules(d)
         ok, total_lines = True, 0
         for m in mods:
-            for line in m.split("\n"):
+            total_lines += 1
+            if wc_for(title_phys_sz, m["title"]) > tbw:
+                ok = False; break
+            for line in m["lines"]:
                 total_lines += 1
-                if wc_for(phys_sz, line) > tbw:
-                    ok = False
-                    break
-            if not ok:
-                break
+                if line["kind"] == "single":
+                    if wc_for(phys_sz, line["text"]) > tbw:
+                        ok = False; break
+                else:
+                    if wc_for(phys_sz, line["left"]) > colwW or wc_for(phys_sz, line["right"]) > colwW:
+                        ok = False; break
+            if not ok: break
         if ok:
             lineH = math.ceil(phys_sz * 1.3)
-            titleH = math.ceil(math.ceil((sz + 2) * SCALE) * 1.3)
-            totalH = titleH + total_lines * lineH + len(mods) * 10
+            titleH = math.ceil(title_phys_sz * 1.3)
+            totalH = titleH + total_lines * lineH + len(mods) * 16
             if totalH <= availH:
-                return sz
-    return 16
-
-def render(d):
-    """返回 (lines, sz, colw)。lines 为所有模块的所有行。"""
-    availW = SCREEN_W - 2 * PAD
-    availH = SCREEN_H - 2 * PAD
-    sz = choose_size(d, availW, availH)
-    half = max(1, sz // 2)
-    colw = int((availW - half) / 2 / half)
-    lines = []
-    for m in build_modules(d, colw):
-        lines.extend(m.split("\n"))
-    return lines, sz, colw
+                return sz, colwW, gap
+    return SIZES[-1], colwW, gap
 
 def main():
     if len(sys.argv) > 1:
         d = json.load(open(sys.argv[1], encoding="utf-8"))
     else:
         d = json.load(urllib.request.urlopen("http://127.0.0.1:8787/api/dashboard", timeout=20))
-    lines, sz, colw = render(d)
-    avail_w = SCREEN_W - 2 * PAD
-    avail_h = SCREEN_H - 2 * PAD
-    line_h = math.ceil(sz * 1.3)
-    total_h = 0
-    print("=== 排版检查 (屏幕 %dx%d, 字号 %d(自适应), 列宽 %d单位, 可用 %dx%d) ===" % (SCREEN_W, SCREEN_H, sz, colw, avail_w, avail_h))
+    availW = SCREEN_W - 2 * PAD
+    availH = SCREEN_H - 2 * PAD
+    sz, colwW, gap = choose_size(d, availW, availH)
+    tbw = availW - 4
+    phys_sz = math.ceil(sz * SCALE)
+    title_phys_sz = math.ceil((sz + 2) * SCALE)
+    lineH = math.ceil(phys_sz * 1.3)
+    titleH = math.ceil(title_phys_sz * 1.3)
+    mods = build_modules(d)
+    total_h = titleH + sum(1 + len(m["lines"]) for m in mods) * lineH + len(mods) * 16
+    print("=== 排版检查 (屏 %dx%d, 字号 %d(自适应→物理%d), 列宽 %dpx, 可用 %dx%d) ===" % (
+        SCREEN_W, SCREEN_H, sz, phys_sz, colwW, availW, availH))
     warn = 0
-    for line in lines:
-        w = wc_for(sz, line)
-        wraps = max(0, math.ceil(w / avail_w) - 1)
-        used = (wraps + 1) * line_h
-        total_h += used
-        status = "OK"
-        if w > avail_w:
+    for m in mods:
+        print("┌─ %s ─┐ (标题粗体)" % m["title"])
+        w = wc_for(title_phys_sz, m["title"])
+        if w > tbw:
             warn += 1
-            status = "!! 超宽 %dpx" % (w - avail_w)
-        print("  %-46s %6.0f  %s" % (line[:46] if len(line) <= 46 else line[:43] + "...", w, status))
+            print("  !! 标题超宽 %dpx" % (w - tbw))
+        for line in m["lines"]:
+            if line["kind"] == "single":
+                w = wc_for(phys_sz, line["text"])
+                status = "OK" if w <= tbw else "!! 超宽 %dpx" % (w - tbw)
+                if w > tbw: warn += 1
+                print("  %-50s %6.0f  %s" % (line["text"][:50], w, status))
+            else:
+                lw = wc_for(phys_sz, line["left"])
+                rw = wc_for(phys_sz, line["right"])
+                lstatus = "OK" if lw <= colwW else "!! 左超 %dpx" % (lw - colwW)
+                rstatus = "OK" if rw <= colwW else "!! 右超 %dpx" % (rw - colwW)
+                if lw > colwW: warn += 1
+                if rw > colwW: warn += 1
+                print("  L %-26s %5.0f  %s" % (line["left"][:26], lw, lstatus))
+                print("  R %-26s %5.0f  %s" % (line["right"][:26], rw, rstatus))
     print("---")
-    print("总行数: %d, 总高: %dpx, 可用高: %dpx, %s" % (
-        len(lines), total_h, avail_h,
-        "余量 %dpx" % (avail_h - total_h) if total_h <= avail_h else "!! 溢出 %dpx" % (total_h - avail_h)))
-    print("超宽行数: %d" % warn)
+    print("模块数: %d, 总高: %dpx, 可用高: %dpx, %s" % (
+        len(mods), total_h, availH,
+        "余量 %dpx" % (availH - total_h) if total_h <= availH else "!! 溢出 %dpx" % (total_h - availH)))
+    print("超宽/超列行数: %d" % warn)
 
 if __name__ == "__main__":
     main()

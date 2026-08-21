@@ -2,7 +2,8 @@
 -- 拉取 PC/Mac 上 kindle-dash 服务的 /api/dashboard，渲染到墨水屏，
 -- 每个整点/半点自动刷新（如 08:30、09:00）。
 -- 模块化线框布局：Shawn Kanban 标题 → Token Usage → 天气/股市/汇率/时钟/更新。
--- 两列内容右列从中线开始；内容超宽时自动降字号。
+-- 两列内容严格中线对齐：左列右对齐到中线 + 右列左对齐从中线开始。
+-- 模块标题用粗体（tfont=NotoSans-Bold）；内容超宽时自动降字号。
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local UIManager = require("ui/uimanager")
 local InfoMessage = require("ui/widget/infomessage")
@@ -12,6 +13,7 @@ local TextBoxWidget = require("ui/widget/textboxwidget")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local VerticalGroup = require("ui/widget/verticalgroup")
+local HorizontalGroup = require("ui/widget/horizontalgroup")
 local CenterContainer = require("ui/widget/container/centercontainer")
 local GestureRange = require("ui/gesturerange")
 local Geom = require("ui/geometry")
@@ -27,10 +29,9 @@ local logger = require("logger")
 local REFRESH_SEC = 30 * 60
 local DEFAULT_HOST = "192.168.31.188"
 local DEFAULT_PORT = "8787"
--- 字号候选（逻辑像素，Font:getFace 内部会 Screen:scaleBySize 缩放为物理）。
--- PW3 scaleBySize 系数 ≈ 1.416（size_scale 1.787 + dpi_override 167/160 1.044）/2。
--- 实测 face.size=22 → 物理 31px，half=15.5，fullw(67单位)≈1038 < width 1050 ✓
-local SIZES = { 22, 20, 18, 16 }
+-- 字号候选（逻辑像素，Font:getFace 内部 Screen:scaleBySize 缩放为物理）。
+-- PW3 scaleBySize 系数 ≈ 1.416。从大到小试，选最大能装下且撑满屏的字号。
+local SIZES = { 30, 28, 26, 24, 22, 20, 18, 16 }
 
 local KindleDash = WidgetContainer:new{
     name = "KindleDash",
@@ -43,8 +44,9 @@ function KindleDash:init()
     self.host = self:loadHost()
     self.dash_widget = nil
     self._auto_timer = nil
-    self.font_size = 26
-    self.colw = 27
+    self.font_size = 22
+    self.colwW = 500       -- 每列物理像素宽，由 chooseSize 设置
+    self.colw_gap = 4      -- 中线两侧空隙
     self:armAutoRefresh()
     self.ui.menu:registerToMainMenu(self)
 end
@@ -60,7 +62,6 @@ function KindleDash:loadHost()
         if s:has("host") then host = s:readSetting("host") or DEFAULT_HOST end
         if s:has("port") then port = s:readSetting("port") or DEFAULT_PORT end
     end
-    -- host 可能是 "IP"、"IP:port" 或 "IP" + 单独存了 port
     if host and not host:find(":", 1, true) then
         host = host .. ":" .. port
     end
@@ -109,21 +110,11 @@ local priceText = function(v)
     return num(v, v >= 1000 and 1 or 2)
 end
 
--- 中英文混排宽度补空格（中文按 2 格计）
-local function padText(s, width)
-    s = tostring(s)
-    local len = 0
-    for u in s:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
-        len = len + (#u > 1 and 2 or 1)
-    end
-    return s .. string.rep(" ", math.max(0, width - len))
-end
-
--- 估算一行文本在字号 sz 下的像素宽度（CJK=sz，ASCII=sz/2）
-local function textWidth(line, sz)
-    local w, half = 0, sz / 2
+-- 估算文本在字号 physSz 下的像素宽度（CJK=physSz，ASCII=physSz/2）
+local function textWidth(line, physSz)
+    local w, half = 0, physSz / 2
     for u in line:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
-        w = w + (#u > 1 and sz or half)
+        w = w + (#u > 1 and physSz or half)
     end
     return w
 end
@@ -139,114 +130,115 @@ local function clockCell(c)
     return string.format("%s %s %s", tostring(c.city), tostring(c.time), tostring(c.date))
 end
 
--- 生成各模块文本。self.colw 已由 chooseSize 按字号算好。
-function KindleDash:buildModuleTexts(d)
-    local colw = self.colw
-    local fullw = 2 * colw + 1 -- 两列 + 1 分隔空格 = 固定行宽
-    local function col2full(left, right)
-        return padText(left, colw) .. " " .. padText(right, colw)
-    end
+-- 生成各模块结构化数据。每行：{kind="single", text=...} 或 {kind="double", left=..., right=...}。
+-- double 行在 showDashboard 中用 HorizontalGroup + 左右两个 TextBoxWidget 严格中线对齐。
+function KindleDash:buildModules(d)
     local q = d.quotas or {}
     local w = d.weather or {}
     local st = (d.stocks and d.stocks.items) or {}
     local fx = d.fx or {}
     local cl = (d.clocks and d.clocks.items) or {}
 
-    -- Token Usage
+    local function single(text) return { kind = "single", text = text } end
+    local function double(left, right) return { kind = "double", left = left, right = right or "" } end
+
+    -- Token Usage（标题混合大小写，不再全大写）
     local tok = {}
     local wb = q.workbuddy or {}
     if wb.ok then
         local t = wb.token or {}
-        table.insert(tok, padText(string.format("WorkBuddy %s/%s (%d%%)",
-            tostring(t.remaining or "?"), tostring(t.size or "?"), t.percent or 0), fullw))
+        table.insert(tok, single(string.format("WorkBuddy %s/%s (%d%%)",
+            tostring(t.remaining or "?"), tostring(t.size or "?"), t.percent or 0)))
     else
-        table.insert(tok, padText("WorkBuddy 不可用", fullw))
+        table.insert(tok, single("WorkBuddy 不可用"))
     end
     local cc = q.claudecode or {}
     local cx = q.codex or {}
-    table.insert(tok, col2full(
+    table.insert(tok, double(
         string.format("ClaudeCode %s/%s", tostring(cc.used7d or "?"), tostring(cc.cap or "?")),
         string.format("Codex %s/%s", tostring(cx.used7d or "?"), tostring(cx.cap or "?"))))
 
     -- 天气
     local wea = {}
     if w.ok then
-        table.insert(wea, padText(string.format("%s  %s %s°C  高%s 低%s 湿%s%%",
+        table.insert(wea, single(string.format("%s  %s %s°C  高%s 低%s 湿%s%%",
             tostring(w.city or ""), tostring(w.text or ""), tostring(w.temp or "?"),
-            tostring(w.high or "?"), tostring(w.low or "?"), tostring(w.humidity or "?")), fullw))
+            tostring(w.high or "?"), tostring(w.low or "?"), tostring(w.humidity or "?"))))
     else
-        table.insert(wea, padText("天气 不可用", fullw))
+        table.insert(wea, single("天气 不可用"))
     end
 
-    -- 股市（两列，右列从中线开始）
+    -- 股市
     local stk = {}
     for i = 1, #st, 2 do
-        table.insert(stk, col2full(stockCell(st[i]), st[i + 1] and stockCell(st[i + 1]) or ""))
+        table.insert(stk, double(stockCell(st[i]), st[i + 1] and stockCell(st[i + 1]) or ""))
     end
 
     -- 汇率
     local fxx = {}
-    table.insert(fxx, col2full("CNY " .. num(fx.cny, 3), "INR " .. num(fx.inr, 3)))
+    table.insert(fxx, double("CNY " .. num(fx.cny, 3), "INR " .. num(fx.inr, 3)))
 
-    -- 时钟（两列）
+    -- 时钟
     local clk = {}
     for i = 1, #cl, 2 do
-        table.insert(clk, col2full(clockCell(cl[i]), cl[i + 1] and clockCell(cl[i + 1]) or ""))
+        table.insert(clk, double(clockCell(cl[i]), cl[i + 1] and clockCell(cl[i + 1]) or ""))
     end
 
     -- 更新
-    local upd = { padText("更新 " .. os.date("%H:%M:%S") .. "  顶部下滑返回", fullw) }
-
-    local function moduleText(title, lines)
-        local all = { padText(title, fullw) }
-        for _, l in ipairs(lines) do
-            table.insert(all, l)
-        end
-        return table.concat(all, "\n")
-    end
+    local upd = { single("更新 " .. os.date("%H:%M:%S") .. "  顶部下滑返回") }
 
     return {
-        { title = "TOKEN USAGE", text = moduleText("TOKEN USAGE", tok) },
-        { title = "天气", text = moduleText("天气", wea) },
-        { title = "股市", text = moduleText("股市", stk) },
-        { title = "汇率", text = moduleText("汇率", fxx) },
-        { title = "时钟", text = moduleText("时钟", clk) },
-        { title = "更新", text = moduleText("更新", upd) },
+        { title = "Token Usage", lines = tok },
+        { title = "天气",        lines = wea },
+        { title = "股市",        lines = stk },
+        { title = "汇率",        lines = fxx },
+        { title = "时钟",        lines = clk },
+        { title = "更新",        lines = upd },
     }
 end
 
--- 选择字号：从大到小试，直到 ①所有行物理宽 ≤ TextBoxWidget width ②模块总高 ≤ 可用高
+-- 选择字号：从大到小试，选最大能装下且总高 ≤ availH 的字号。
 -- 关键：Font:getFace(size) 内部 Screen:scaleBySize(size) → 物理 size = 逻辑 × ~1.416
--- colw/textWidth 必须用物理 half，否则 fullw 物理远超估算导致强制换行
+-- textWidth 用物理 sz 算（与渲染一致）；single 行宽=tbw，double 每列宽=colwW（严格中线对齐）
 function KindleDash:chooseSize(data, availW, availH)
-    local tbw = self.ui.dimen.w - 22  -- TextBoxWidget width（物理），屏 1072-22=1050
+    local gap = 4  -- 中线两侧 2+2 像素空隙
+    local tbw = availW - 4                      -- 单行 TextBoxWidget width
+    local colwW = math.floor((availW - gap) / 2) -- 每列物理宽（严格中线对齐）
     for _, sz in ipairs(SIZES) do
-        local physSz = Screen:scaleBySize(sz)  -- 逻辑→物理
-        local physHalf = physSz / 2
-        -- colw 单位使 fullw 物理 = (2*colw+1)*physHalf < tbw
-        self.colw = math.floor((tbw - physHalf) / (2 * physHalf))
-        local mods = self:buildModuleTexts(data)
+        local physSz = Screen:scaleBySize(sz)
+        local titlePhysSz = Screen:scaleBySize(sz + 2)
+        local mods = self:buildModules(data)
         local ok, totalLines = true, 0
         for _, m in ipairs(mods) do
-            for line in (m.text or ""):gmatch("[^\n]+") do
+            totalLines = totalLines + 1  -- 标题行
+            if textWidth(m.title, titlePhysSz) > tbw then ok = false; break end
+            for _, line in ipairs(m.lines) do
                 totalLines = totalLines + 1
-                -- textWidth 用物理 sz 算（与渲染一致）
-                if textWidth(line, physSz) > tbw then
-                    ok = false
-                    break
+                if line.kind == "single" then
+                    if textWidth(line.text, physSz) > tbw then ok = false; break end
+                else
+                    if textWidth(line.left, physSz) > colwW or textWidth(line.right, physSz) > colwW then
+                        ok = false; break
+                    end
                 end
             end
             if not ok then break end
         end
         if ok then
-            local lineH = math.ceil(physSz * 1.3)  -- 物理行高
-            local titleH = math.ceil(Screen:scaleBySize(sz + 2) * 1.3)
-            local totalH = titleH + totalLines * lineH + #mods * 10
+            local lineH = math.ceil(physSz * 1.3)
+            local titleH = math.ceil(titlePhysSz * 1.3)
+            -- 每个模块：标题 + 内容行 + 边框/padding/margin 开销 ≈ 16px
+            local totalH = titleH + totalLines * lineH + #mods * 16
             if totalH <= availH then
+                self.colwW = colwW
+                self.colw_gap = gap
                 return sz
             end
         end
     end
+    -- 全部装不下时取最小字号
+    self.colwW = colwW
+    self.colw_gap = gap
     return SIZES[#SIZES]
 end
 
@@ -259,38 +251,76 @@ function KindleDash:showDashboard(data)
     local scr = self.ui.dimen
     local w = scr and scr.w or 600
     local h = scr and scr.h or 800
-    local pad = 12
+    local pad = 8
 
     local sz = self:chooseSize(data, w - 2 * pad, h - 2 * pad)
     self.font_size = sz
-    local mods = self:buildModuleTexts(data)
+    local mods = self:buildModules(data)
     local face = Font:getFace("ffont", sz)
-    local titleFace = Font:getFace("ffont", sz + 2)
+    local titleFace = Font:getFace("tfont", sz)        -- 模块标题粗体（tfont=NotoSans-Bold）
+    local mainTitleFace = Font:getFace("tfont", sz + 4) -- 主标题更大粗体
 
-    -- 垂直堆叠：标题 + 各线框模块
+    local colwW = self.colwW
+    local gap = self.colw_gap
+    local tbw = w - 2 * pad - 4  -- 单行 TextBoxWidget width
+
+    -- 计算实际总高，把剩余空间分配给模块间距（撑满屏幕）
+    local physSz = Screen:scaleBySize(sz)
+    local titlePhysSz = Screen:scaleBySize(sz + 2)
+    local mainTitlePhysSz = Screen:scaleBySize(sz + 4)
+    local lineH = math.ceil(physSz * 1.3)
+    local titleH = math.ceil(titlePhysSz * 1.3)
+    local mainTitleH = math.ceil(mainTitlePhysSz * 1.3)
+    local totalLines = 0
+    for _, m in ipairs(mods) do totalLines = totalLines + 1 + #m.lines end
+    local baseModuleOverhead = 16  -- border1*2 + padding4*2 + margin2*2
+    local totalH = mainTitleH + totalLines * lineH + #mods * baseModuleOverhead
+    local availH = h - 2 * pad
+    local extra = math.max(0, availH - totalH)
+    -- 每模块额外 margin（上下分摊）+ padding 增加
+    local extraPerMod = math.floor(extra / #mods)
+    local modMargin = 2 + math.floor(extraPerMod / 2)
+    local modPadding = 4 + math.floor(extraPerMod / 4)
+
     local vg = VerticalGroup:new{ align = "left" }
-    table.insert(vg, FrameContainer:new{
-        bordersize = 0,
-        padding = 2,
-        margin = 0,
-        background = Blitbuffer.COLOR_WHITE,
-        TextWidget:new{ text = "SHAWN KANBAN", face = titleFace },
-    })
-        for _, m in ipairs(mods) do
-        -- 多行文本必须用 TextBoxWidget（TextWidget 只支持单行）
-        -- width = 屏宽 - 22 = 1050 物理，给 advance 余量防强制换行
-        local tw = TextBoxWidget:new{ text = m.text, face = face, width = w - 22 }
+    -- 主标题（粗体）
+    table.insert(vg, TextWidget:new{ text = "Shawn Kanban", face = mainTitleFace })
+
+    for _, m in ipairs(mods) do
+        local modVg = VerticalGroup:new{ align = "left" }
+        -- 模块标题（粗体，左对齐）
+        table.insert(modVg, TextBoxWidget:new{
+            text = m.title, face = titleFace, width = tbw, alignment = "left",
+        })
+        -- 内容行
+        for _, line in ipairs(m.lines) do
+            if line.kind == "single" then
+                table.insert(modVg, TextBoxWidget:new{
+                    text = line.text, face = face, width = tbw, alignment = "left",
+                })
+            else
+                -- 两列严格中线对齐：左列右对齐到中线 + 右列左对齐从中线开始
+                local hg = HorizontalGroup:new{ align = "center" }
+                table.insert(hg, TextBoxWidget:new{
+                    text = line.left, face = face, width = colwW, alignment = "right",
+                })
+                table.insert(hg, TextBoxWidget:new{
+                    text = line.right, face = face, width = colwW, alignment = "left",
+                })
+                table.insert(modVg, hg)
+            end
+        end
         local frame = FrameContainer:new{
             bordersize = 1,
-            padding = 2,
-            margin = 2,
+            padding = modPadding,
+            margin = modMargin,
             background = Blitbuffer.COLOR_WHITE,
-            tw,
+            modVg,
         }
         table.insert(vg, frame)
     end
 
-    -- 全屏白底 + 内容垂直居中（尺寸由 center=全屏 决定，无需给 FrameContainer 设 dimen）
+    -- 全屏白底 + 内容垂直居中
     local center = CenterContainer:new{
         dimen = Geom:new{ w = w, h = h },
         vg,
@@ -435,7 +465,7 @@ function KindleDash:addToMainMenu(menu_items)
                 text = "关于",
                 callback = function()
                     UIManager:show(InfoMessage:new{
-                        text = "Shawn Kanban\n拉取 PC/Mac 的 /api/dashboard\n含限额/天气/股市/时钟/汇率\n整点/半点自动刷新，返回键关闭",
+                        text = "Shawn Kanban\n拉取 PC/Mac 的 /api/dashboard\n含限额/天气/股市/时钟/汇率\n整点/半点自动刷新，顶部下滑返回",
                         timeout = 5
                     })
                 end
