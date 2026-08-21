@@ -27,11 +27,12 @@ function toGtimgCode(s) {
 }
 
 // Kline symbol differs slightly from the quote symbol: US stocks need an
-// exchange suffix (.OQ = NASDAQ, .N = NYSE). We try .OQ first, then .N.
+// exchange suffix. NASDAQ -> .OQ, NYSE -> .N, NYSE Arca (many ETFs) -> .AM.
+// We try them in order until one yields a usable series.
 function toKlineCode(s) {
   if (s.mkt === 'US') {
     const sym = String(s.sym).toUpperCase();
-    return [`us${sym}.OQ`, `us${sym}.N`];
+    return [`us${sym}.OQ`, `us${sym}.N`, `us${sym}.AM`];
   }
   const raw = String(s.sym).toUpperCase();
   const [code, ex] = raw.split('.');

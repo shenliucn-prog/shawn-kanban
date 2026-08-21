@@ -168,12 +168,8 @@ function render(d){
     +'<div class="grid"><div class="card"><h2><span class="ico">🕐</span>世界时钟</h2><div class="clocks-grid">'+clocks+'</div></div></div>';
 }
 function paint(){
-  const ok=(INIT&&INIT.stocks&&INIT.stocks.items&&INIT.stocks.items.some(s=>s.ok));
   document.getElementById('meta').innerHTML=
-    '<span>服务正常</span><span class="badge '+(ok?'ok':'err')+'">'+(ok?'LIVE':'ERR')+'</span>'
-    +'<span style="margin-left:8px">更新 '+new Date((INIT&&INIT.serverTime)||Date.now()).toLocaleTimeString()+'</span>'
-    +'<span style="margin-left:8px">下次刷新 '+nextSlotLabel()+'</span>'
-    +'<span style="margin-left:8px"><a href="/api/dashboard" style="color:#58a6ff">JSON</a></span>';
+    '<span>更新 '+new Date((INIT&&INIT.serverTime)||Date.now()).toLocaleTimeString()+'</span>';
   document.getElementById('app').innerHTML=render(INIT||{});
 }
 function tickClock(){
@@ -183,12 +179,6 @@ function tickClock(){
 async function refresh(){
   try{const r=await fetch('/api/dashboard',{cache:'no-store'});INIT=await r.json();paint();}
   catch(e){document.getElementById('meta').innerHTML+='<span class="badge err">刷新失败</span>';}
-}
-function nextSlotLabel(){
-  const n=new Date();const mins=n.getHours()*60+n.getMinutes();
-  const target=mins<30?30:60;
-  const h=Math.floor(target/60),m=target%60;
-  return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');
 }
 let refreshTimer=null;
 function scheduleRefresh(){

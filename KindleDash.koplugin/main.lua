@@ -179,8 +179,8 @@ function KindleDash:renderText(d)
             arrow, s.changePct == nil and "" or pct(s.changePct)))
         local sp = s.spark
         if sp and sp.closes and #sp.closes >= 2 then
-            local mini = sparkline(sp.closes, 14)
-            if mini ~= "" then table.insert(L, "    " .. mini) end
+            local mini = sparkline(sp.closes, 10)
+            if mini ~= "" then table.insert(L, "  30日 " .. mini) end
         end
     end
 
@@ -199,7 +199,7 @@ function KindleDash:renderText(d)
     end
 
     table.insert(L, "")
-    table.insert(L, "更新 " .. os.date("%H:%M:%S") .. "  源 " .. tostring(self.host))
+    table.insert(L, "更新 " .. os.date("%H:%M:%S"))
     return table.concat(L, "\n")
 end
 
@@ -213,11 +213,11 @@ function KindleDash:showDashboard(data)
     local scr = self.ui.dimen
     local w = scr and scr.w or 600
     local h = scr and scr.h or 800
-    local pad = 12
+    local pad = 16
 
     local stw = ScrollTextWidget:new{
         text = text,
-        face = Font:getFace("ffont", 18),
+        face = Font:getFace("ffont", 22),
         fgcolor = Blitbuffer.COLOR_BLACK,
         width = w - 2 * pad,
         height = h - 2 * pad,
