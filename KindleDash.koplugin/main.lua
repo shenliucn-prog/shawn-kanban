@@ -1,10 +1,17 @@
--- KindleDash — 越狱 Kindle 常驻看板插件
--- 拉取 PC/Mac 上 kindle-dash 服务的 /api/dashboard，渲染到墨水屏，每 30 分钟自动刷新。
+-- Shawn Kanban — 越狱 Kindle 常驻看板插件
+-- 拉取 PC/Mac 上 kindle-dash 服务的 /api/dashboard，渲染到墨水屏，
+-- 每个整点/半点自动刷新（如 08:30、09:00）。
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local UIManager = require("ui/uimanager")
-local TextViewer = require("ui/widget/textviewer")
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
+local ScrollTextWidget = require("ui/widget/scrolltextwidget")
+local FrameContainer = require("ui/widget/container/framecontainer")
+local InputContainer = require("ui/widget/container/inputcontainer")
+local GestureRange = require("ui/gesturerange")
+local Geom = require("ui/geometry")
+local Font = require("ui/font")
+local Blitbuffer = require("ffi/blitbuffer")
 local LuaSettings = require("luasettings")
 local DataStorage = require("datastorage")
 local http = require("socket.http")
@@ -86,6 +93,16 @@ local pct = function(v)
     return (v > 0 and "+" or "") .. num(v, 1) .. "%"
 end
 
+-- 中英文混排宽度补空格，让多列对齐（中文按 2 格计）
+local function padText(s, width)
+    s = tostring(s)
+    local len = 0
+    for u in s:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+        len = len + (#u > 1 and 2 or 1)
+    end
+    return s .. string.rep(" ", math.max(0, width - len))
+end
+
 -- 字符迷你走势图（块字符，e-ink 友好）
 local SPARK_CHARS = { "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█" }
 local function sparkline(closes, n)
@@ -119,7 +136,8 @@ function KindleDash:renderText(d)
     local L = {}
     local q = d.quotas or {}
 
-    table.insert(L, "═══ KINDLE DASH ═══")
+    table.insert(L, "═══ SHAWN KANBAN ═══")
+    table.insert(L, "当前 " .. os.date("%Y-%m-%d %H:%M:%S"))
     local wb = q.workbuddy or {}
     if wb.ok then
         local t = wb.token or {}
@@ -175,7 +193,8 @@ function KindleDash:renderText(d)
     table.insert(L, "")
     table.insert(L, "── 世界时钟 ──")
     for _, c in ipairs(cl) do
-        table.insert(L, string.format("%s  %s  %s", tostring(c.city),
+        -- 城市名补宽对齐（中文按 2 格），时间列逐行对齐
+        table.insert(L, string.format("%s %s %s", padText(c.city, 8),
             tostring(c.time), tostring(c.date)))
     end
 
@@ -184,22 +203,58 @@ function KindleDash:renderText(d)
     return table.concat(L, "\n")
 end
 
--- ---------- 展示 ----------
-function KindleDash:showDashboard(data, silent)
+-- ---------- 展示（全屏无按钮栏；点击左右翻页，返回键关闭） ----------
+function KindleDash:showDashboard(data)
     local text = self:renderText(data)
     if self.dash_widget then
         UIManager:close(self.dash_widget)
         self.dash_widget = nil
     end
-    local viewer = TextViewer:new{
-        title = "Kindle Dash",
+    local scr = self.ui.dimen
+    local w = scr and scr.w or 600
+    local h = scr and scr.h or 800
+    local pad = 12
+
+    local stw = ScrollTextWidget:new{
         text = text,
-        text_type = "general",
-        width = self.ui.dimen and self.ui.dimen.w or 600,
-        height = self.ui.dimen and self.ui.dimen.h or 800,
+        face = Font:getFace("ffont", 18),
+        fgcolor = Blitbuffer.COLOR_BLACK,
+        width = w - 2 * pad,
+        height = h - 2 * pad,
     }
-    self.dash_widget = viewer
-    UIManager:show(viewer)
+    local frame = FrameContainer:new{
+        bordersize = 0,
+        padding = pad,
+        background = Blitbuffer.COLOR_WHITE,
+        stw,
+    }
+    local container = InputContainer:new{
+        dimen = Geom:new{ w = w, h = h },
+    }
+    container[1] = frame
+    container.ges_events = {
+        TapScroll = {
+            GestureRange:new{ ges = "tap", range = function() return container.dimen end },
+        },
+    }
+    function container:onTapScroll(_, ges)
+        if ges.pos.x < w / 2 then
+            stw:onScrollUp()
+        else
+            stw:onScrollDown()
+        end
+        return true
+    end
+    function container:onClose()
+        UIManager:close(self)
+        return true
+    end
+    function container:onBack()
+        UIManager:close(self)
+        return true
+    end
+    self.dash_widget = container
+    UIManager:show(container)
 end
 
 function KindleDash:refreshDashboard(silent)
@@ -208,13 +263,20 @@ function KindleDash:refreshDashboard(silent)
         if not silent then
             UIManager:show(InfoMessage:new{ text = "刷新失败: " .. tostring(err), timeout = 3 })
         end
-        logger.warn("KindleDash refresh failed:", err)
+        logger.warn("ShawnKanban refresh failed:", err)
         return
     end
-    self:showDashboard(data, silent)
+    self:showDashboard(data)
 end
 
--- ---------- 自动刷新 ----------
+-- ---------- 自动刷新（对齐整点/半点，如 08:30、09:00） ----------
+local function secondsToNextSlot()
+    local t = os.date("*t")
+    local mins = t.min
+    local target = mins < 30 and 30 or 60
+    return (target - mins) * 60 - t.sec
+end
+
 function KindleDash:armAutoRefresh()
     if not self.auto_on then return end
     local function tick()
@@ -222,13 +284,15 @@ function KindleDash:armAutoRefresh()
         self:refreshDashboard(true) -- 静默刷新；看板若开着则原地更新
         self._auto_timer = UIManager:scheduleIn(REFRESH_SEC, tick)
     end
-    self._auto_timer = UIManager:scheduleIn(REFRESH_SEC, tick)
+    local first = secondsToNextSlot()
+    if first < 30 then first = first + REFRESH_SEC end
+    self._auto_timer = UIManager:scheduleIn(first, tick)
 end
 function KindleDash:toggleAutoRefresh()
     self.auto_on = not self.auto_on
     if self.auto_on then
         self:armAutoRefresh()
-        UIManager:show(InfoMessage:new{ text = "自动刷新: 开 (30分钟)", timeout = 2 })
+        UIManager:show(InfoMessage:new{ text = "自动刷新: 开 (整点/半点)", timeout = 2 })
     else
         UIManager:show(InfoMessage:new{ text = "自动刷新: 关", timeout = 2 })
     end
@@ -266,7 +330,7 @@ end
 
 function KindleDash:addToMainMenu(menu_items)
     menu_items.kindledash = {
-        text = "Kindle Dash",
+        text = "Shawn Kanban",
         sorting_hint = "tools",
         callback = function()
             self:refreshDashboard(false)
@@ -281,14 +345,14 @@ function KindleDash:addToMainMenu(menu_items)
                 callback = function() self:setServerAddress() end
             },
             {
-                text = "切换自动刷新 (30分钟)",
+                text = "切换自动刷新 (整点/半点)",
                 callback = function() self:toggleAutoRefresh() end
             },
             {
                 text = "关于",
                 callback = function()
                     UIManager:show(InfoMessage:new{
-                        text = "Kindle Dash\n拉取 PC/Mac 的 /api/dashboard\n含限额/天气/股市/时钟/汇率\n自动刷新间隔 30 分钟",
+                        text = "Shawn Kanban\n拉取 PC/Mac 的 /api/dashboard\n含限额/天气/股市/时钟/汇率\n整点/半点自动刷新，点击左右翻页，返回键关闭",
                         timeout = 5
                     })
                 end

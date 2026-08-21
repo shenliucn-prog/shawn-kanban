@@ -5,21 +5,21 @@ import { config } from './config.js';
 let db = null;
 try {
   db = openDb(config.dbPath);
-  console.log('[kindle-dash] opened DB:', config.dbPath);
+  console.log('[shawn-kanban] opened DB:', config.dbPath);
 } catch (e) {
-  console.warn('[kindle-dash] WARN: could not open DB at', config.dbPath, '-', e.message);
-  console.warn('[kindle-dash] service still runs; WorkBuddy quota will show unavailable.');
+  console.warn('[shawn-kanban] WARN: could not open DB at', config.dbPath, '-', e.message);
+  console.warn('[shawn-kanban] service still runs; WorkBuddy quota will show unavailable.');
 }
 
 const server = createServer({ db, cfg: config });
 
 server.listen(config.port, config.host, () => {
-  console.log(`[kindle-dash] listening on http://${config.host}:${config.port}`);
-  console.log(`[kindle-dash] Kindle/MacBook open http://<this-machine-ip>:${config.port}/api/dashboard`);
+  console.log(`[shawn-kanban] listening on http://${config.host}:${config.port}`);
+  console.log(`[shawn-kanban] Kindle/MacBook open http://<this-machine-ip>:${config.port}/api/dashboard`);
 });
 
 function shutdown() {
-  console.log('[kindle-dash] shutting down...');
+  console.log('[shawn-kanban] shutting down...');
   try {
     server.close();
   } catch {

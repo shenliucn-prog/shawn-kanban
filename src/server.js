@@ -20,7 +20,7 @@ function renderHtml(initial) {
   return `<!doctype html><html lang="zh"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kindle Dash</title>
+<title>Shawn Kanban</title>
 <style>
 :root{color-scheme:dark;}
 *{box-sizing:border-box;margin:0;padding:0;}
@@ -69,9 +69,9 @@ header .meta{font-size:12px;color:#8b949e;}
 .fx-card .fc{font-size:12px;color:#8b949e;margin-bottom:4px;}
 .fx-card .fv{font-size:22px;font-weight:800;}
 .clocks-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
-.clock{display:flex;justify-content:space-between;align-items:baseline;background:#161b22;border:1px solid #30363d;border-radius:10px;padding:8px 12px;}
+.clock{display:grid;grid-template-columns:4.5em 1fr auto;align-items:baseline;background:#161b22;border:1px solid #30363d;border-radius:10px;padding:8px 12px;}
 .clock .cc{font-size:12px;color:#8b949e;}
-.clock .ct{font-size:16px;font-weight:700;}
+.clock .ct{font-size:16px;font-weight:700;text-align:center;font-variant-numeric:tabular-nums;}
 .clock .cd{font-size:11px;color:#6e7681;text-align:right;}
 .loading{color:#8b949e;text-align:center;padding:40px;font-size:15px;}
 @media(max-width:900px){
@@ -82,8 +82,11 @@ header .meta{font-size:12px;color:#8b949e;}
 </style></head><body>
 <div class="wrap">
 <header>
-  <h1>KINDLE <span>DASH</span></h1>
-  <div class="meta" id="meta">加载中…</div>
+  <h1>SHAWN <span>KANBAN</span></h1>
+  <div class="meta">
+    <span id="clock" style="font-size:19px;font-weight:700;font-variant-numeric:tabular-nums;margin-right:14px;color:#e6edf3">--:--:--</span>
+    <span id="meta">加载中…</span>
+  </div>
 </header>
 <div id="app"><div class="loading">加载中…</div></div>
 </div>
@@ -169,15 +172,35 @@ function paint(){
   document.getElementById('meta').innerHTML=
     '<span>服务正常</span><span class="badge '+(ok?'ok':'err')+'">'+(ok?'LIVE':'ERR')+'</span>'
     +'<span style="margin-left:8px">更新 '+new Date((INIT&&INIT.serverTime)||Date.now()).toLocaleTimeString()+'</span>'
+    +'<span style="margin-left:8px">下次刷新 '+nextSlotLabel()+'</span>'
     +'<span style="margin-left:8px"><a href="/api/dashboard" style="color:#58a6ff">JSON</a></span>';
   document.getElementById('app').innerHTML=render(INIT||{});
+}
+function tickClock(){
+  const el=document.getElementById('clock');
+  if(el)el.textContent=new Date().toLocaleTimeString('zh-CN',{hour12:false});
 }
 async function refresh(){
   try{const r=await fetch('/api/dashboard',{cache:'no-store'});INIT=await r.json();paint();}
   catch(e){document.getElementById('meta').innerHTML+='<span class="badge err">刷新失败</span>';}
 }
+function nextSlotLabel(){
+  const n=new Date();const mins=n.getHours()*60+n.getMinutes();
+  const target=mins<30?30:60;
+  const h=Math.floor(target/60),m=target%60;
+  return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');
+}
+let refreshTimer=null;
+function scheduleRefresh(){
+  const n=new Date();
+  const nowMs=n.getMinutes()*60000+n.getSeconds()*1000+n.getMilliseconds();
+  const slot=nowMs<1800000?1800000:3600000; // 对齐到下一个 :30 / :00
+  clearTimeout(refreshTimer);
+  refreshTimer=setTimeout(()=>{refresh();scheduleRefresh();},slot-nowMs);
+}
+tickClock();setInterval(tickClock,1000);
 paint();
-setInterval(refresh,30000);
+scheduleRefresh();
 </script>
 </body></html>`;
 }
