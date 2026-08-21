@@ -20,3 +20,6 @@ kindle-jailbreak/*.tar.xz
 npm-debug.log*
 kindle-dash-export.zip
 export/*.zip
+
+# preview artifacts
+tools/*.png
