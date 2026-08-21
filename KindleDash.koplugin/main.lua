@@ -190,7 +190,7 @@ function KindleDash:buildModuleTexts(d)
     end
 
     -- 更新
-    local upd = { padText("更新 " .. os.date("%H:%M:%S"), fullw) }
+    local upd = { padText("更新 " .. os.date("%H:%M:%S") .. "  顶部下滑返回", fullw) }
 
     local function moduleText(title, lines)
         local all = { padText(title, fullw) }
@@ -303,11 +303,19 @@ function KindleDash:showDashboard(data)
             GestureRange:new{ ges = "swipe", range = function() return container.dimen end },
         },
     }
-    function container:onTapScroll()
-        return true -- 吃掉 tap，防穿透
+    function container:onTapScroll(_, ges)
+        -- 点击顶部 = 返回（Kindle 无实体返回键，KOReader 靠顶部手势返回）
+        if ges and ges.pos and ges.pos.y < h * 0.1 then
+            container:onClose()
+        end
+        return true -- 其余 tap 吃掉防穿透
     end
-    function container:onSwipeScroll()
-        return true -- 吃掉 swipe，防穿透；一屏显示无需翻页
+    function container:onSwipeScroll(_, ges)
+        -- 从顶部开始下滑 = 返回；其余滑动吃掉（防穿透，内容一屏无需滚动）
+        if ges and ges.pos and ges.direction == "south" and ges.pos.y < h * 0.25 then
+            container:onClose()
+        end
+        return true
     end
     function container:onClose()
         UIManager:close(self)
