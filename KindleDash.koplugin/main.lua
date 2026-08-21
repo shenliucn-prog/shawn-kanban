@@ -13,7 +13,6 @@ local TextBoxWidget = require("ui/widget/textboxwidget")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local VerticalGroup = require("ui/widget/verticalgroup")
-local HorizontalGroup = require("ui/widget/horizontalgroup")
 local CenterContainer = require("ui/widget/container/centercontainer")
 local GestureRange = require("ui/gesturerange")
 local Geom = require("ui/geometry")
@@ -117,6 +116,25 @@ local function textWidth(line, physSz)
         w = w + (#u > 1 and physSz or half)
     end
     return w
+end
+
+-- 中英文混排宽度补空格（中文按 2 格计），返回补到 width 单位的字符串
+function KindleDash.padText(s, width)
+    s = tostring(s)
+    local len = 0
+    for u in s:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+        len = len + (#u > 1 and 2 or 1)
+    end
+    return s .. string.rep(" ", math.max(0, width - len))
+end
+-- 类方法形式（让 buildModules/self 内可调用）
+KindleDash.padText = function(self, s, width)
+    s = tostring(s)
+    local len = 0
+    for u in s:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
+        len = len + (#u > 1 and 2 or 1)
+    end
+    return s .. string.rep(" ", math.max(0, width - len))
 end
 
 local function stockCell(s)
@@ -257,8 +275,11 @@ function KindleDash:showDashboard(data)
     self.font_size = sz
     local mods = self:buildModules(data)
     local face = Font:getFace("ffont", sz)
-    local titleFace = Font:getFace("tfont", sz)        -- 模块标题粗体（tfont=NotoSans-Bold）
-    local mainTitleFace = Font:getFace("tfont", sz + 4) -- 主标题更大粗体
+    -- 加粗：传 ffont face + bold=true，让 KOReader 合成粗体（synthesized bold，
+    -- 字符宽不变，避免 col2full 算错）；tfont=NotoSans-Bold.ttf 也对，但 fontmap
+    -- 的 isRealBoldFont 检测要求显式 bold=true 才稳。
+    local titleFace = Font:getFace("ffont", sz + 2)
+    local mainTitleFace = Font:getFace("ffont", sz + 4)
 
     local colwW = self.colwW
     local gap = self.colw_gap
@@ -284,30 +305,33 @@ function KindleDash:showDashboard(data)
 
     local vg = VerticalGroup:new{ align = "left" }
     -- 主标题（粗体）
-    table.insert(vg, TextWidget:new{ text = "Shawn Kanban", face = mainTitleFace })
+    table.insert(vg, TextWidget:new{ text = "Shawn Kanban", face = mainTitleFace, bold = true })
 
     for _, m in ipairs(mods) do
         local modVg = VerticalGroup:new{ align = "left" }
         -- 模块标题（粗体，左对齐）
         table.insert(modVg, TextBoxWidget:new{
-            text = m.title, face = titleFace, width = tbw, alignment = "left",
+            text = m.title, face = titleFace, bold = true, width = tbw, alignment = "left",
         })
-        -- 内容行
+        -- 内容行（回退到 col2full 拼接 + TextBoxWidget{width=fullw, alignment="left"}）
+        -- 原因：HorizontalGroup 不支持子 widget 水平对齐，无法做严格中线 split。
+        -- 之前版本用 col2full(padText 左补宽 + 2空格 + right) 已成功，视觉整齐。
+        local function col2full(left, right)
+            local colw = math.floor(tbw / 2 / (physSz / 2))
+            return self:padText(left, colw) .. "  " .. tostring(right or "")
+        end
         for _, line in ipairs(m.lines) do
             if line.kind == "single" then
                 table.insert(modVg, TextBoxWidget:new{
                     text = line.text, face = face, width = tbw, alignment = "left",
                 })
             else
-                -- 两列严格中线对齐：左列右对齐到中线 + 右列左对齐从中线开始
-                local hg = HorizontalGroup:new{ align = "center" }
-                table.insert(hg, TextBoxWidget:new{
-                    text = line.left, face = face, width = colwW, alignment = "right",
+                table.insert(modVg, TextBoxWidget:new{
+                    text = col2full(line.left, line.right),
+                    face = face,
+                    width = tbw,
+                    alignment = "left",
                 })
-                table.insert(hg, TextBoxWidget:new{
-                    text = line.right, face = face, width = colwW, alignment = "left",
-                })
-                table.insert(modVg, hg)
             end
         end
         local frame = FrameContainer:new{
