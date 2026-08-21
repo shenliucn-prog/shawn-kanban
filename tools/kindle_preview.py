@@ -1,19 +1,21 @@
 # -*- coding: utf-8 -*-
-"""模拟 Kindle PW3 实际渲染（从用户照片反推的真实参数）。
+"""模拟 Kindle PW3 实际渲染（从 E 盘 KOReader 源码反推的真实参数）。
 
-关键发现（2026-08-22 由照片精确测量得出）：
+关键事实（E 盘源码实测）：
 - KOReader self.ui.dimen 在 PW3 上 = 物理像素 1072×1448
-- Font:getFace(size) 内部 Screen:scaleBySize(size)，系数 ≈1.416
-- 实际物理字号 = 逻辑字号 × 1.416；行高 = 物理字号 × 1.3
-- 加粗：传 ffont face + bold=true（KOReader 合成粗体），tfont face 单传未必生效
+- framebuffer.lua scaleBySize(px) = ceil(px*(size_scale+dpi_scale)/2)，
+  无 dpi_override 时 size_scale = dpi_scale = 1072/600 = 1.7867
+- textboxwidget.lua:151 line_height_px = round(1.3 * face.size)
+- 加粗：传 ffont face + bold=true（KOReader 合成粗体）
 - 中线对齐：HorizontalGroup 无子 widget 水平对齐机制，回退到 col2full + padText 拼接
 """
 import json, urllib.request, math, sys
 
 SCREEN_W, SCREEN_H = 1072, 1448  # PW3 物理像素
 PAD = 8                            # 屏外边距
-SCALE = 1.416                      # Screen:scaleBySize 系数
-SIZES = (30, 28, 26, 24, 22, 20, 18, 16)
+SCALE = 1072 / 600                 # = 1.7867，Screen:scaleBySize 系数
+SIZES = (26, 24, 22, 20, 18, 16)
+MIN_LINES_PER_MODULE = 2           # 每模块至少占 2 行内容（不足补空行）
 
 def num(v, d=None):
     if v is None: return "n/a"
@@ -98,19 +100,20 @@ def build_modules(d, colw):
     ]
 
 def choose_size(d, availW, availH):
-    """复刻 main.lua chooseSize。colw 用全宽/2/half。"""
+    """复刻 main.lua chooseSize。精确行高 1.3，模块开销 22，安全缓冲 40。"""
     tbw = availW - 4
-    half = 14  # 预估 sz=28 → physSz=40 → half=20；选个中位
-    colw = int(tbw / 2 / half)
     for sz in SIZES:
         phys_sz = math.ceil(sz * SCALE)
         title_phys_sz = math.ceil((sz + 2) * SCALE)
+        main_title_phys_sz = math.ceil((sz + 4) * SCALE)
         phys_half = phys_sz / 2
-        colw = int(tbw / 2 / phys_half)
+        colw = int((tbw - phys_half) / (2 * phys_half))
         mods = build_modules(d, colw)
-        ok, total_lines = True, 1  # 主标题 1 行
+        ok = True
+        if wc_for(main_title_phys_sz, "Shawn Kanban") > tbw:
+            ok = False
         for m in mods:
-            total_lines += 1 + len(m["lines"])
+            if not ok: break
             if wc_for(title_phys_sz, m["title"]) > tbw:
                 ok = False; break
             for line in m["lines"]:
@@ -120,8 +123,11 @@ def choose_size(d, availW, availH):
         if ok:
             lineH = math.ceil(phys_sz * 1.3)
             titleH = math.ceil(title_phys_sz * 1.3)
-            mainTitleH = math.ceil(math.ceil((sz + 4) * SCALE) * 1.3)
-            totalH = mainTitleH + total_lines * lineH + len(mods) * 16
+            mainTitleH = math.ceil(main_title_phys_sz * 1.3)
+            totalH = mainTitleH
+            for m in mods:
+                totalH += titleH + max(len(m["lines"]), MIN_LINES_PER_MODULE) * lineH
+            totalH += len(mods) * 22 + 40
             if totalH <= availH:
                 return sz, colw, tbw
     return SIZES[-1], colw, tbw
@@ -137,11 +143,17 @@ def main():
     mods = build_modules(d, colw)
     phys_sz = math.ceil(sz * SCALE)
     title_phys_sz = math.ceil((sz + 2) * SCALE)
+    main_title_phys_sz = math.ceil((sz + 4) * SCALE)
     lineH = math.ceil(phys_sz * 1.3)
     titleH = math.ceil(title_phys_sz * 1.3)
-    mainTitleH = math.ceil(math.ceil((sz + 4) * SCALE) * 1.3)
-    total_lines = 1 + sum(1 + len(m["lines"]) for m in mods)
-    totalH = mainTitleH + total_lines * lineH + len(mods) * 16
+    mainTitleH = math.ceil(main_title_phys_sz * 1.3)
+    total_lines = 1
+    for m in mods:
+        total_lines += 1 + max(len(m["lines"]), MIN_LINES_PER_MODULE)
+    totalH = mainTitleH
+    for m in mods:
+        totalH += titleH + max(len(m["lines"]), MIN_LINES_PER_MODULE) * lineH
+    totalH += len(mods) * 22 + 40
     print("=== 排版检查 (屏 %dx%d, 字号 %d/物理%d, colw=%d单位, 可用 %dx%d) ===" % (
         SCREEN_W, SCREEN_H, sz, phys_sz, colw, availW, availH))
     warn = 0

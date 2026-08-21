@@ -6,7 +6,7 @@
 """
 import sys, os, json, urllib.request, math
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from kindle_preview import build_modules, choose_size, SCREEN_W, SCREEN_H, PAD, SCALE
+from kindle_preview import build_modules, choose_size, SCREEN_W, SCREEN_H, PAD, SCALE, MIN_LINES_PER_MODULE
 from PIL import Image, ImageDraw, ImageFont
 
 FONT_REGULAR = r"C:/Windows/Fonts/msyh.ttc"
@@ -28,15 +28,13 @@ def main():
     physSz = math.ceil(sz * SCALE)
     titlePhysSz = math.ceil((sz + 2) * SCALE)
     mainTitlePhysSz = math.ceil((sz + 4) * SCALE)
-    lineH = math.ceil(physSz * 1.3)
+    lineH = math.ceil(physSz * 1.3)  # 实际渲染行高
     titleH = math.ceil(titlePhysSz * 1.3)
     mainTitleH = math.ceil(mainTitlePhysSz * 1.3)
-    total_lines = 1 + sum(1 + len(m["lines"]) for m in mods)
-    totalH = mainTitleH + total_lines * lineH + len(mods) * 16
-    extra = max(0, availH - totalH)
-    extraPerMod = extra // len(mods)
-    modMargin = 2 + extraPerMod // 2
-    modPadding = 4 + extraPerMod // 4
+    # 固定 padding/margin（与 main.lua 一致，不再撑满屏）
+    modMargin = 4
+    modPadding = 6
+    minLines = MIN_LINES_PER_MODULE
 
     img = Image.new("RGB", (SCREEN_W, SCREEN_H), "white")
     draw = ImageDraw.Draw(img)
@@ -46,10 +44,11 @@ def main():
 
     y = PAD
     draw.text((PAD, y), "Shawn Kanban", fill="black", font=font_main)
-    y += mainTitleH + 4
+    y += mainTitleH + 8
 
     for m in mods:
-        mod_lines_h = (1 + len(m["lines"])) * lineH
+        eff_lines = max(len(m["lines"]), minLines)
+        mod_lines_h = titleH + eff_lines * lineH
         frame_h = mod_lines_h + 2 * (modPadding + 1)
         x0 = PAD; x1 = SCREEN_W - PAD
         y += modMargin
@@ -57,12 +56,14 @@ def main():
         ty = y + modPadding + 1
         # 标题：粗体
         draw.text((x0 + modPadding + 1, ty), m["title"], fill="black", font=font_title)
-        ty += titleH + (lineH - titleH) // 2  # 标题行按实际 titleH 渲染，但占满 lineH 防止错位
-        ty = y + modPadding + 1 + titleH
+        ty += titleH  # 标题占 1 行（用更大字号行高）
         # 内容行
         for line in m["lines"]:
             draw.text((x0 + modPadding + 1, ty), line, fill="black", font=font_body)
             ty += lineH
+        # 预留空行（不足 minLines 补空行）
+        for _ in range(max(0, minLines - len(m["lines"]))):
+            ty += lineH  # 空行占位
         y += frame_h + modMargin
 
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kindle_preview.png")

@@ -13,7 +13,6 @@ local TextBoxWidget = require("ui/widget/textboxwidget")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local VerticalGroup = require("ui/widget/verticalgroup")
-local CenterContainer = require("ui/widget/container/centercontainer")
 local GestureRange = require("ui/gesturerange")
 local Geom = require("ui/geometry")
 local Font = require("ui/font")
@@ -29,8 +28,9 @@ local REFRESH_SEC = 30 * 60
 local DEFAULT_HOST = "192.168.31.188"
 local DEFAULT_PORT = "8787"
 -- 字号候选（逻辑像素，Font:getFace 内部 Screen:scaleBySize 缩放为物理）。
--- PW3 scaleBySize 系数 ≈ 1.416。从大到小试，选最大能装下且撑满屏的字号。
-local SIZES = { 30, 28, 26, 24, 22, 20, 18, 16 }
+-- PW3 scaleBySize 系数 = 1072/600 = 1.7867（无 dpi_override 时 dpi_scale=size_scale）。
+-- 从大到小试，选最大能装下且留有余量的字号。
+local SIZES = { 26, 24, 22, 20, 18, 16 }
 
 local KindleDash = WidgetContainer:new{
     name = "KindleDash",
@@ -44,8 +44,8 @@ function KindleDash:init()
     self.dash_widget = nil
     self._auto_timer = nil
     self.font_size = 22
-    self.colwW = 500       -- 每列物理像素宽，由 chooseSize 设置
-    self.colw_gap = 4      -- 中线两侧空隙
+    self.colw = 20         -- 两列每列宽度（单位），由 chooseSize 设置
+    self.min_lines_per_module = 2
     self:armAutoRefresh()
     self.ui.menu:registerToMainMenu(self)
 end
@@ -215,48 +215,58 @@ function KindleDash:buildModules(d)
     }
 end
 
--- 选择字号：从大到小试，选最大能装下且总高 ≤ availH 的字号。
--- 关键：Font:getFace(size) 内部 Screen:scaleBySize(size) → 物理 size = 逻辑 × ~1.416
--- textWidth 用物理 sz 算（与渲染一致）；single 行宽=tbw，double 每列宽=colwW（严格中线对齐）
+-- 选择字号：从大到小试，选最大能装下且留有余量的字号。
+-- 关键事实（已从 E 盘 KOReader 源码实测）：
+--  1) Font:getFace(size) 内部 Screen:scaleBySize(size)，PW3 系数 = 1072/600 = 1.7867
+--  2) TextBoxWidget 行高 line_height_px = round(1.3 * face.size)（textboxwidget.lua:151）
+--  3) colw 单位制：1 单位 = physHalf = physSz/2（CJK=2 单位，ASCII=1 单位）
 function KindleDash:chooseSize(data, availW, availH)
-    local gap = 4  -- 中线两侧 2+2 像素空隙
-    local tbw = availW - 4                      -- 单行 TextBoxWidget width
-    local colwW = math.floor((availW - gap) / 2) -- 每列物理宽（严格中线对齐）
+    local tbw = availW - 4                  -- 单行 TextBoxWidget 宽度（物理）
+    local MIN_LINES = 2                     -- 每模块至少预留 2 行内容（便于在线加内容）
     for _, sz in ipairs(SIZES) do
         local physSz = Screen:scaleBySize(sz)
         local titlePhysSz = Screen:scaleBySize(sz + 2)
+        local mainTitlePhysSz = Screen:scaleBySize(sz + 4)
+        local physHalf = physSz / 2
+        -- 两列每列宽度（单位）：留出中间 2 空格余量，保证整行 < tbw 不换行
+        local colw = math.floor((tbw - physHalf) / (2 * physHalf))
         local mods = self:buildModules(data)
-        local ok, totalLines = true, 0
+        local ok = true
+        -- 宽度检查
+        if textWidth("Shawn Kanban", mainTitlePhysSz) > tbw then ok = false end
         for _, m in ipairs(mods) do
-            totalLines = totalLines + 1  -- 标题行
+            if not ok then break end
             if textWidth(m.title, titlePhysSz) > tbw then ok = false; break end
             for _, line in ipairs(m.lines) do
-                totalLines = totalLines + 1
                 if line.kind == "single" then
                     if textWidth(line.text, physSz) > tbw then ok = false; break end
                 else
-                    if textWidth(line.left, physSz) > colwW or textWidth(line.right, physSz) > colwW then
+                    if textWidth(line.left, physSz) > colw * physHalf
+                       or textWidth(line.right, physSz) > colw * physHalf then
                         ok = false; break
                     end
                 end
             end
-            if not ok then break end
         end
         if ok then
-            local lineH = math.ceil(physSz * 1.3)
-            local titleH = math.ceil(titlePhysSz * 1.3)
-            -- 每个模块：标题 + 内容行 + 边框/padding/margin 开销 ≈ 16px
-            local totalH = titleH + totalLines * lineH + #mods * 16
+            -- 精确行高（与 TextBoxWidget 一致：round(1.3*face.size)，用 ceil 略保守）
+            local lineH = math.ceil(1.3 * physSz)
+            local titleH = math.ceil(1.3 * titlePhysSz)
+            local mainTitleH = math.ceil(1.3 * mainTitlePhysSz)
+            local totalH = mainTitleH
+            for _, m in ipairs(mods) do
+                totalH = totalH + titleH + math.max(#m.lines, MIN_LINES) * lineH
+            end
+            -- 模块边框开销 = border1*2 + padding6*2 + margin4*2 = 22；再留 40px 安全缓冲
+            totalH = totalH + #mods * 22 + 40
             if totalH <= availH then
-                self.colwW = colwW
-                self.colw_gap = gap
+                self.colw = colw
+                self.min_lines_per_module = MIN_LINES
                 return sz
             end
         end
     end
-    -- 全部装不下时取最小字号
-    self.colwW = colwW
-    self.colw_gap = gap
+    self.min_lines_per_module = MIN_LINES
     return SIZES[#SIZES]
 end
 
@@ -276,32 +286,19 @@ function KindleDash:showDashboard(data)
     local mods = self:buildModules(data)
     local face = Font:getFace("ffont", sz)
     -- 加粗：传 ffont face + bold=true，让 KOReader 合成粗体（synthesized bold，
-    -- 字符宽不变，避免 col2full 算错）；tfont=NotoSans-Bold.ttf 也对，但 fontmap
-    -- 的 isRealBoldFont 检测要求显式 bold=true 才稳。
+    -- 字符宽不变，避免 colw 算错）
     local titleFace = Font:getFace("ffont", sz + 2)
     local mainTitleFace = Font:getFace("ffont", sz + 4)
 
-    local colwW = self.colwW
-    local gap = self.colw_gap
+    local colw = self.colw or 20
+    local minLines = self.min_lines_per_module or 2
     local tbw = w - 2 * pad - 4  -- 单行 TextBoxWidget width
 
-    -- 计算实际总高，把剩余空间分配给模块间距（撑满屏幕）
-    local physSz = Screen:scaleBySize(sz)
-    local titlePhysSz = Screen:scaleBySize(sz + 2)
-    local mainTitlePhysSz = Screen:scaleBySize(sz + 4)
-    local lineH = math.ceil(physSz * 1.3)
-    local titleH = math.ceil(titlePhysSz * 1.3)
-    local mainTitleH = math.ceil(mainTitlePhysSz * 1.3)
-    local totalLines = 0
-    for _, m in ipairs(mods) do totalLines = totalLines + 1 + #m.lines end
-    local baseModuleOverhead = 16  -- border1*2 + padding4*2 + margin2*2
-    local totalH = mainTitleH + totalLines * lineH + #mods * baseModuleOverhead
-    local availH = h - 2 * pad
-    local extra = math.max(0, availH - totalH)
-    -- 每模块额外 margin（上下分摊）+ padding 增加
-    local extraPerMod = math.floor(extra / #mods)
-    local modMargin = 2 + math.floor(extraPerMod / 2)
-    local modPadding = 4 + math.floor(extraPerMod / 4)
+    -- 两列拼接（padText 左补宽到 colw 单位 + 2 空格 + 右列），
+    -- colw 已按物理 half 留余量，整行 < tbw 不换行
+    local function col2full(left, right)
+        return self:padText(left, colw) .. "  " .. tostring(right or "")
+    end
 
     local vg = VerticalGroup:new{ align = "left" }
     -- 主标题（粗体）
@@ -313,13 +310,6 @@ function KindleDash:showDashboard(data)
         table.insert(modVg, TextBoxWidget:new{
             text = m.title, face = titleFace, bold = true, width = tbw, alignment = "left",
         })
-        -- 内容行（回退到 col2full 拼接 + TextBoxWidget{width=fullw, alignment="left"}）
-        -- 原因：HorizontalGroup 不支持子 widget 水平对齐，无法做严格中线 split。
-        -- 之前版本用 col2full(padText 左补宽 + 2空格 + right) 已成功，视觉整齐。
-        local function col2full(left, right)
-            local colw = math.floor(tbw / 2 / (physSz / 2))
-            return self:padText(left, colw) .. "  " .. tostring(right or "")
-        end
         for _, line in ipairs(m.lines) do
             if line.kind == "single" then
                 table.insert(modVg, TextBoxWidget:new{
@@ -328,32 +318,33 @@ function KindleDash:showDashboard(data)
             else
                 table.insert(modVg, TextBoxWidget:new{
                     text = col2full(line.left, line.right),
-                    face = face,
-                    width = tbw,
-                    alignment = "left",
+                    face = face, width = tbw, alignment = "left",
                 })
             end
         end
+        -- 模块预留空间：不足 minLines 行则补空行，便于后续在线加内容
+        for _ = #m.lines + 1, minLines do
+            table.insert(modVg, TextBoxWidget:new{
+                text = " ", face = face, width = tbw, alignment = "left",
+            })
+        end
         local frame = FrameContainer:new{
             bordersize = 1,
-            padding = modPadding,
-            margin = modMargin,
+            padding = 6,
+            margin = 4,
             background = Blitbuffer.COLOR_WHITE,
             modVg,
         }
         table.insert(vg, frame)
     end
 
-    -- 全屏白底 + 内容垂直居中
-    local center = CenterContainer:new{
-        dimen = Geom:new{ w = w, h = h },
-        vg,
-    }
+    -- 顶部锚定布局（不用 CenterContainer：内容略超时上下都会被裁，顶部锚定
+    -- 只影响底部；chooseSize 已留 40px 缓冲 + 固定边距，保证一屏装下）
     local bg = FrameContainer:new{
         bordersize = 0,
-        padding = 0,
+        padding = pad,
         background = Blitbuffer.COLOR_WHITE,
-        center,
+        vg,
     }
 
     local container = InputContainer:new{
