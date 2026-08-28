@@ -292,13 +292,16 @@ def draw_weather(draw, d, y):
     y = draw_title(draw, y, '天气')
     if w.get('ok'):
         t1 = '%s°' % fnum(w.get('temp'))
-        draw.text((PAD, y), t1, fill=BLACK, font=f(F_BIG, bold=True))
-        tw1 = tw(draw, t1, f(F_BIG, bold=True))
+        ft = f(F_BIG, bold=True)
+        draw.text((PAD, y), t1, fill=BLACK, font=ft)
+        tw1 = tw(draw, t1, ft)
         det = '%s  高%s 低%s  湿%s%%' % (w.get('text', ''), fnum(w.get('high')), fnum(w.get('low')), w.get('humidity', '?'))
         draw.text((PAD + tw1 + 24, y + 14), det, fill=GRAY, font=f(F_SMALL))
+        # 温度大字用 56px 字体，实际字形高度超过 F_BIG，固定 y+F_BIG 会让字形底部压过分隔线
+        return draw.textbbox((PAD, y), t1, font=ft)[3] + 8
     else:
         draw.text((PAD, y), '天气不可用', fill=GRAY, font=f(F_SMALL))
-    return y + F_BIG
+        return y + F_SMALL + 8
 
 def draw_market(draw, d, y):
     st = (d.get('stocks') or {}).get('items', [])

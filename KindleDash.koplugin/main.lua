@@ -21,7 +21,7 @@ local GestureRange = require("ui/gesturerange")
 local http = require("socket.http")
 local LuaSettings = require("luasettings")
 local DataStorage = require("datastorage")
-local lfs = require("lfs")
+local lfs = require("libs/libkoreader-lfs")
 local logger = require("logger")
 
 -- 网络请求超时：电脑关机时不要让用户等太久，8 秒无响应就切换离线缓存
@@ -406,11 +406,10 @@ function KindleDash:setCloudUrl()
 end
 
 function KindleDash:addToMainMenu(menu_items)
-    menu_items.kindledash = {
+    menu_items["0kindledash"] = {
         text = "Shawn Kanban",
         sorting_hint = "tools",
-        callback = function() self:safeRefresh() end,
-        submenus = {
+        sub_item_table = {
             { text = "刷新看板",     callback = function() self:safeRefresh() end },
             { text = "设置局域网服务器", callback = function() self:setServerAddress() end },
             { text = "设置云端图地址", callback = function() self:setCloudUrl() end },
@@ -419,7 +418,7 @@ function KindleDash:addToMainMenu(menu_items)
                 UIManager:show(InfoMessage:new{
                     text = "Shawn Kanban\n取图顺序：局域网 PC > 云端 Pages > 本地缓存\n"
                        .. "云端每 15 分钟由 GitHub Actions 渲染\n"
-                       .. "AI 额度需要本机上报器在线才会更新\n"
+                       .. "AI 额度走局域网实时，关机显示最后值\n"
                        .. "唤醒即刷 + 30 分自动\n顶部下滑/顶部点击返回",
                     timeout = 6
                 })
