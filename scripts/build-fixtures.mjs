@@ -1,13 +1,18 @@
 // Generates the fixture SQLite databases used by the test suite.
 // Run automatically via `npm run pretest` (before `npm test`).
+//
+// NOTE: this script MUST live outside test/ because `node --test`
+// treats every .js/.mjs under test/ as a test file and would run it
+// concurrently with db.test.js, racing the DB delete/recreate.
 import Database from 'better-sqlite3';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { mkdirSync, unlinkSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const MAIN = join(__dirname, 'workbuddy.db');
-const EMPTY = join(__dirname, 'empty.db');
+const FIXTURES = join(__dirname, '..', 'test', 'fixtures');
+const MAIN = join(FIXTURES, 'workbuddy.db');
+const EMPTY = join(FIXTURES, 'empty.db');
 
 function schema(db) {
   db.exec(`
@@ -102,7 +107,7 @@ const fixtureRows = [
   }
 ];
 
-mkdirSync(__dirname, { recursive: true });
+mkdirSync(FIXTURES, { recursive: true });
 build(MAIN, fixtureRows);
 build(EMPTY, []);
 console.log('fixtures built:', MAIN, EMPTY);

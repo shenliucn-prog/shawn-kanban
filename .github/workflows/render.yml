@@ -105,13 +105,14 @@ jobs:
       - name: Publish to gh-pages
         run: |
           set -e
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
           rm -rf _site && mkdir -p _site
           cp screen.png _site/screen.png
           cp dashboard.json _site/dashboard.json
           cd _site
           git init -q
+          # 身份必须配在这个新建仓库里，配在外层仓库对 _site 不生效
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -q -b gh-pages
           git add -A
           git commit -q -m "render $(date -u +%Y-%m-%dT%H:%M:%SZ)"
