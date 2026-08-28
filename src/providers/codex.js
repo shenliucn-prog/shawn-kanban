@@ -11,7 +11,16 @@ export function getCodexUsage() {
   const cap = getConfig().codexCap;
   const dir = paths.codexCandidates.find((p) => existsSync(p));
   if (!dir) {
-    return { ok: false, error: 'no codex data dir found', cap };
+    // 本机未安装 Codex：保持与 claudecode 相同的字段结构，UI 预留位置显示"未安装"
+    return {
+      ok: false,
+      error: 'not-installed',
+      cap,
+      used7d: null,
+      remaining: null,
+      percent: 0,
+      unit: 'messages'
+    };
   }
   const cutoff = Date.now() - WEEK;
   let used = 0;
@@ -43,12 +52,18 @@ export function getCodexUsage() {
     };
     scan(dir, 0);
   } catch (e) {
-    return { ok: false, error: e.message, cap };
+    return {
+      ok: false, error: e.message, cap,
+      used7d: null, remaining: null, percent: 0, unit: 'files'
+    };
   }
   return {
     ok: true,
     used7d: used,
     cap,
+    remaining: Math.max(0, cap - used),
+    percent: cap ? Math.min(100, Math.round((used / cap) * 100)) : 0,
+    unit: 'files',
     source: `local ${dir} (approx)`
   };
 }

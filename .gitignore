@@ -23,3 +23,8 @@ export/*.zip
 
 # preview artifacts
 tools/*.png
+
+# runtime logs / cache
+tools/*.log
+tools/__pycache__/
+*.pyc

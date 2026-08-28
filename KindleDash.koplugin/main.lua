@@ -1,41 +1,33 @@
--- Shawn Kanban — 越狱 Kindle 常驻看板插件
--- 拉取 PC/Mac 上 kindle-dash 服务的 /api/dashboard，渲染到墨水屏，
--- 每个整点/半点自动刷新（如 08:30、09:00）。
--- 模块化线框布局：Shawn Kanban 标题 → Token Usage → 天气/股市/汇率/时钟/更新。
--- 两列内容严格中线对齐：左列右对齐到中线 + 右列左对齐从中线开始。
--- 模块标题用粗体（tfont=NotoSans-Bold）；内容超宽时自动降字号。
+-- Shawn Kanban · Kindle 端显示插件（混合路线 v1）
+-- 拉取 PC 端 /api/screen 渲染好的整屏 PNG（1-bit 抖动 / ~24KB），
+-- 用 ImageWidget 满屏显示。排版/字体/灰度/抖动全部在 PC 端完成。
+-- 自动刷新：onResume 唤醒即刷 + 30 分钟定时器；离线时用上次缓存。
+
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local UIManager = require("ui/uimanager")
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
-local TextWidget = require("ui/widget/textwidget")
-local TextBoxWidget = require("ui/widget/textboxwidget")
-local FrameContainer = require("ui/widget/container/framecontainer")
 local InputContainer = require("ui/widget/container/inputcontainer")
-local VerticalGroup = require("ui/widget/verticalgroup")
-local GestureRange = require("ui/gesturerange")
+local ImageWidget = require("ui/widget/imagewidget")
 local Geom = require("ui/geometry")
-local Font = require("ui/font")
-local Screen = require("device").screen  -- 用于 scaleBySize（face.size 物理 = scaleBySize(逻辑)）
-local Blitbuffer = require("ffi/blitbuffer")
+local Screen = require("device").screen
+local GestureRange = require("ui/gesturerange")
+local http = require("socket.http")
 local LuaSettings = require("luasettings")
 local DataStorage = require("datastorage")
-local http = require("socket.http")
-local json = require("json")
 local logger = require("logger")
 
 local REFRESH_SEC = 30 * 60
 local DEFAULT_HOST = "192.168.31.188"
 local DEFAULT_PORT = "8787"
--- 字号候选（逻辑像素，Font:getFace 内部 Screen:scaleBySize 缩放为物理）。
--- PW3 scaleBySize 系数 = 1072/600 = 1.7867（无 dpi_override 时 dpi_scale=size_scale）。
--- 从大到小试，选最大能装下且留有余量的字号。
-local SIZES = { 26, 24, 22, 20, 18, 16 }
+-- KOReader 上可写临时目录（restart 后丢失；offline 缓存用同一目录）
+local SCREEN_PATH = "/tmp/dash_screen.png"
+local CACHE_PATH = "/tmp/dash_screen_cache.png"
 
 local KindleDash = WidgetContainer:new{
     name = "KindleDash",
     is_doc_only = false,
-    sorting_hint = "tools", -- 归到「工具」分组
+    sorting_hint = "tools",
 }
 
 function KindleDash:init()
@@ -43,14 +35,13 @@ function KindleDash:init()
     self.host = self:loadHost()
     self.dash_widget = nil
     self._auto_timer = nil
-    self.font_size = 22
-    self.colw = 20         -- 两列每列宽度（单位），由 chooseSize 设置
-    self.min_lines_per_module = 2
+    self._last_ok = false
+    self._offline = false
     self:armAutoRefresh()
     self.ui.menu:registerToMainMenu(self)
 end
 
--- ---------- 设置持久化 ----------
+-- ---------- 设置 ----------
 function KindleDash:settingsPath()
     return DataStorage:getSettingsDir() .. "/kindledash.lua"
 end
@@ -80,294 +71,69 @@ function KindleDash:saveHost(host)
     self.host = host
 end
 
--- ---------- 网络拉取 ----------
-function KindleDash:fetchDashboard()
-    local url = "http://" .. self.host .. "/api/dashboard"
+-- ---------- 拉取屏幕 ----------
+function KindleDash:fetchScreen()
+    local url = "http://" .. self.host .. "/api/screen"
     local body, code = http.request(url)
-    if not body or code ~= 200 then
+    if not body or body == "" or code ~= 200 then
         return nil, "fetch failed (" .. tostring(code) .. ")"
     end
-    local ok, data = pcall(json.decode, body)
-    if not ok then
-        return nil, "bad json"
-    end
-    return data, nil
+    return body, nil
 end
 
--- ---------- 文本工具 ----------
-local num = function(v, d)
-    if v == nil then return "n/a" end
-    if d then return string.format("%." .. d .. "f", v) end
-    return tostring(v)
-end
-local pct = function(v)
-    if v == nil then return "" end
-    return num(math.abs(v), 1) .. "%" -- 符号由 sign 提供
-end
-local priceText = function(v)
-    if v == nil then return "?" end
-    return num(v, v >= 1000 and 1 or 2)
+-- 保存 PNG 到临时文件（ImageWidget 需要 file 或 BlitBuffer，用 file 最稳）
+function KindleDash:writePng(path, data)
+    local f, err = io.open(path, "wb")
+    if not f then return nil, err end
+    f:write(data)
+    f:close()
+    return true
 end
 
--- 估算文本在字号 physSz 下的像素宽度（CJK=physSz，ASCII=physSz/2）
-local function textWidth(line, physSz)
-    local w, half = 0, physSz / 2
-    for u in line:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
-        w = w + (#u > 1 and physSz or half)
-    end
-    return w
+function KindleDash:fileExists(path)
+    local f = io.open(path, "rb")
+    if f then f:close(); return true end
+    return false
 end
 
--- 中英文混排宽度补空格（中文按 2 格计），返回补到 width 单位的字符串
-function KindleDash.padText(s, width)
-    s = tostring(s)
-    local len = 0
-    for u in s:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
-        len = len + (#u > 1 and 2 or 1)
-    end
-    return s .. string.rep(" ", math.max(0, width - len))
-end
--- 类方法形式（让 buildModules/self 内可调用）
-KindleDash.padText = function(self, s, width)
-    s = tostring(s)
-    local len = 0
-    for u in s:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
-        len = len + (#u > 1 and 2 or 1)
-    end
-    return s .. string.rep(" ", math.max(0, width - len))
-end
-
-local function stockCell(s)
-    local mkt = s.mkt == "US" and "美" or (s.mkt == "A" and "A" or " ")
-    local sign = s.changePct == nil and "" or (s.changePct >= 0 and "+" or "-")
-    return string.format("%s %s %s %s%s",
-        mkt, tostring(s.label or s.sym), priceText(s.price),
-        sign, s.changePct == nil and "" or pct(s.changePct))
-end
-local function clockCell(c)
-    return string.format("%s %s %s", tostring(c.city), tostring(c.time), tostring(c.date))
-end
-
--- 生成各模块结构化数据。每行：{kind="single", text=...} 或 {kind="double", left=..., right=...}。
--- double 行在 showDashboard 中用 HorizontalGroup + 左右两个 TextBoxWidget 严格中线对齐。
-function KindleDash:buildModules(d)
-    local q = d.quotas or {}
-    local w = d.weather or {}
-    local st = (d.stocks and d.stocks.items) or {}
-    local fx = d.fx or {}
-    local cl = (d.clocks and d.clocks.items) or {}
-
-    local function single(text) return { kind = "single", text = text } end
-    local function double(left, right) return { kind = "double", left = left, right = right or "" } end
-
-    -- Token Usage（标题混合大小写，不再全大写）
-    local tok = {}
-    local wb = q.workbuddy or {}
-    if wb.ok then
-        local t = wb.token or {}
-        table.insert(tok, single(string.format("WorkBuddy %s/%s (%d%%)",
-            tostring(t.remaining or "?"), tostring(t.size or "?"), t.percent or 0)))
-    else
-        table.insert(tok, single("WorkBuddy 不可用"))
-    end
-    local cc = q.claudecode or {}
-    local cx = q.codex or {}
-    table.insert(tok, double(
-        string.format("ClaudeCode %s/%s", tostring(cc.used7d or "?"), tostring(cc.cap or "?")),
-        string.format("Codex %s/%s", tostring(cx.used7d or "?"), tostring(cx.cap or "?"))))
-
-    -- 天气
-    local wea = {}
-    if w.ok then
-        table.insert(wea, single(string.format("%s  %s %s°C  高%s 低%s 湿%s%%",
-            tostring(w.city or ""), tostring(w.text or ""), tostring(w.temp or "?"),
-            tostring(w.high or "?"), tostring(w.low or "?"), tostring(w.humidity or "?"))))
-    else
-        table.insert(wea, single("天气 不可用"))
-    end
-
-    -- 股市
-    local stk = {}
-    for i = 1, #st, 2 do
-        table.insert(stk, double(stockCell(st[i]), st[i + 1] and stockCell(st[i + 1]) or ""))
-    end
-
-    -- 汇率
-    local fxx = {}
-    table.insert(fxx, double("CNY " .. num(fx.cny, 3), "INR " .. num(fx.inr, 3)))
-
-    -- 时钟
-    local clk = {}
-    for i = 1, #cl, 2 do
-        table.insert(clk, double(clockCell(cl[i]), cl[i + 1] and clockCell(cl[i + 1]) or ""))
-    end
-
-    -- 更新
-    local upd = { single("更新 " .. os.date("%H:%M:%S") .. "  顶部下滑返回") }
-
-    return {
-        { title = "Token Usage", lines = tok },
-        { title = "天气",        lines = wea },
-        { title = "股市",        lines = stk },
-        { title = "汇率",        lines = fxx },
-        { title = "时钟",        lines = clk },
-        { title = "更新",        lines = upd },
-    }
-end
-
--- 选择字号：从大到小试，选最大能装下且留有余量的字号。
--- 关键事实（已从 E 盘 KOReader 源码实测）：
---  1) Font:getFace(size) 内部 Screen:scaleBySize(size)，PW3 系数 = 1072/600 = 1.7867
---  2) TextBoxWidget 行高 line_height_px = round(1.3 * face.size)（textboxwidget.lua:151）
---  3) colw 单位制：1 单位 = physHalf = physSz/2（CJK=2 单位，ASCII=1 单位）
-function KindleDash:chooseSize(data, availW, availH)
-    local tbw = availW - 4                  -- 单行 TextBoxWidget 宽度（物理）
-    local MIN_LINES = 2                     -- 每模块至少预留 2 行内容（便于在线加内容）
-    for _, sz in ipairs(SIZES) do
-        local physSz = Screen:scaleBySize(sz)
-        local titlePhysSz = Screen:scaleBySize(sz + 2)
-        local mainTitlePhysSz = Screen:scaleBySize(sz + 4)
-        local physHalf = physSz / 2
-        -- 两列每列宽度（单位）：留出中间 2 空格余量，保证整行 < tbw 不换行
-        local colw = math.floor((tbw - physHalf) / (2 * physHalf))
-        local mods = self:buildModules(data)
-        local ok = true
-        -- 宽度检查
-        if textWidth("Shawn Kanban", mainTitlePhysSz) > tbw then ok = false end
-        for _, m in ipairs(mods) do
-            if not ok then break end
-            if textWidth(m.title, titlePhysSz) > tbw then ok = false; break end
-            for _, line in ipairs(m.lines) do
-                if line.kind == "single" then
-                    if textWidth(line.text, physSz) > tbw then ok = false; break end
-                else
-                    if textWidth(line.left, physSz) > colw * physHalf
-                       or textWidth(line.right, physSz) > colw * physHalf then
-                        ok = false; break
-                    end
-                end
-            end
-        end
-        if ok then
-            -- 精确行高（与 TextBoxWidget 一致：round(1.3*face.size)，用 ceil 略保守）
-            local lineH = math.ceil(1.3 * physSz)
-            local titleH = math.ceil(1.3 * titlePhysSz)
-            local mainTitleH = math.ceil(1.3 * mainTitlePhysSz)
-            local totalH = mainTitleH
-            for _, m in ipairs(mods) do
-                totalH = totalH + titleH + math.max(#m.lines, MIN_LINES) * lineH
-            end
-            -- 模块边框开销 = border1*2 + padding6*2 + margin4*2 = 22；再留 40px 安全缓冲
-            totalH = totalH + #mods * 22 + 40
-            if totalH <= availH then
-                self.colw = colw
-                self.min_lines_per_module = MIN_LINES
-                return sz
-            end
-        end
-    end
-    self.min_lines_per_module = MIN_LINES
-    return SIZES[#SIZES]
-end
-
--- ---------- 展示（线框模块；手势全部吃掉防退出，返回键关闭） ----------
-function KindleDash:showDashboard(data)
+-- ---------- 显示 ----------
+function KindleDash:showDashboard(img_path, offline)
     if self.dash_widget then
         UIManager:close(self.dash_widget)
         self.dash_widget = nil
     end
-    local scr = self.ui.dimen
-    local w = scr and scr.w or 600
-    local h = scr and scr.h or 800
-    local pad = 8
+    -- 用 Screen 尺寸最稳；ui.dimen 在文件管理器/阅读器切换时可能不对
+    local w = Screen:getWidth()
+    local h = Screen:getHeight()
+    logger.info("ShawnKanban showDashboard screen=", w, "x", h, "img=", img_path)
 
-    local sz = self:chooseSize(data, w - 2 * pad, h - 2 * pad)
-    self.font_size = sz
-    local mods = self:buildModules(data)
-    local face = Font:getFace("ffont", sz)
-    -- 加粗：传 ffont face + bold=true，让 KOReader 合成粗体（synthesized bold，
-    -- 字符宽不变，避免 colw 算错）
-    local titleFace = Font:getFace("ffont", sz + 2)
-    local mainTitleFace = Font:getFace("ffont", sz + 4)
-
-    local colw = self.colw or 20
-    local minLines = self.min_lines_per_module or 2
-    local tbw = w - 2 * pad - 4  -- 单行 TextBoxWidget width
-
-    -- 两列拼接（padText 左补宽到 colw 单位 + 2 空格 + 右列），
-    -- colw 已按物理 half 留余量，整行 < tbw 不换行
-    local function col2full(left, right)
-        return self:padText(left, colw) .. "  " .. tostring(right or "")
-    end
-
-    local vg = VerticalGroup:new{ align = "left" }
-    -- 主标题（粗体）
-    table.insert(vg, TextWidget:new{ text = "Shawn Kanban", face = mainTitleFace, bold = true })
-
-    for _, m in ipairs(mods) do
-        local modVg = VerticalGroup:new{ align = "left" }
-        -- 模块标题（粗体，左对齐）
-        table.insert(modVg, TextBoxWidget:new{
-            text = m.title, face = titleFace, bold = true, width = tbw, alignment = "left",
-        })
-        for _, line in ipairs(m.lines) do
-            if line.kind == "single" then
-                table.insert(modVg, TextBoxWidget:new{
-                    text = line.text, face = face, width = tbw, alignment = "left",
-                })
-            else
-                table.insert(modVg, TextBoxWidget:new{
-                    text = col2full(line.left, line.right),
-                    face = face, width = tbw, alignment = "left",
-                })
-            end
-        end
-        -- 模块预留空间：不足 minLines 行则补空行，便于后续在线加内容
-        for _ = #m.lines + 1, minLines do
-            table.insert(modVg, TextBoxWidget:new{
-                text = " ", face = face, width = tbw, alignment = "left",
-            })
-        end
-        local frame = FrameContainer:new{
-            bordersize = 1,
-            padding = 6,
-            margin = 4,
-            background = Blitbuffer.COLOR_WHITE,
-            modVg,
-        }
-        table.insert(vg, frame)
-    end
-
-    -- 顶部锚定布局（不用 CenterContainer：内容略超时上下都会被裁，顶部锚定
-    -- 只影响底部；chooseSize 已留 40px 缓冲 + 固定边距，保证一屏装下）
-    local bg = FrameContainer:new{
-        bordersize = 0,
-        padding = pad,
-        background = Blitbuffer.COLOR_WHITE,
-        vg,
+    -- ImageWidget 满屏显示
+    -- file_do_cache=false: 切换图时强制重新解码；close 时 ImageWidget:free() 释放 BlitBuffer
+    local img = ImageWidget:new{
+        file = img_path,
+        width = w,
+        height = h,
+        scale_factor = 0,        -- 按 width/height 缩放填满（保持宽高比需 stretch_limit 或 align）
+        file_do_cache = false,
     }
-
     local container = InputContainer:new{
         dimen = Geom:new{ w = w, h = h },
     }
-    container[1] = bg
+    container[1] = img
+    -- 吃手势（防 KOReader 退出/翻页穿透）
     container.ges_events = {
-        TapScroll = {
-            GestureRange:new{ ges = "tap", range = function() return container.dimen end },
-        },
-        SwipeScroll = {
-            GestureRange:new{ ges = "swipe", range = function() return container.dimen end },
-        },
+        TapScroll = { GestureRange:new{ ges = "tap", range = function() return container.dimen end } },
+        SwipeScroll = { GestureRange:new{ ges = "swipe", range = function() return container.dimen end } },
     }
     function container:onTapScroll(_, ges)
-        -- 点击顶部 = 返回（Kindle 无实体返回键，KOReader 靠顶部手势返回）
+        -- 顶部 10% 区域点击 = 退出（Kindle 无 Back 键，靠此关闭看板）
         if ges and ges.pos and ges.pos.y < h * 0.1 then
             container:onClose()
         end
-        return true -- 其余 tap 吃掉防穿透
+        return true
     end
     function container:onSwipeScroll(_, ges)
-        -- 从顶部开始下滑 = 返回；其余滑动吃掉（防穿透，内容一屏无需滚动）
+        -- 顶部 25% 下滑 = 退出
         if ges and ges.pos and ges.direction == "south" and ges.pos.y < h * 0.25 then
             container:onClose()
         end
@@ -381,23 +147,45 @@ function KindleDash:showDashboard(data)
         UIManager:close(self)
         return true
     end
+    function container:onResume()
+        -- 唤醒即刷
+        pcall(function() KindleDash.refreshDashboard(KindleDash, true) end)
+        return true
+    end
     self.dash_widget = container
     UIManager:show(container)
 end
 
+-- ---------- 刷新（含离线缓存兜底） ----------
 function KindleDash:refreshDashboard(silent)
-    local data, err = self:fetchDashboard()
+    local data, err = self:fetchScreen()
     if not data then
-        if not silent then
-            UIManager:show(InfoMessage:new{ text = "刷新失败: " .. tostring(err), timeout = 3 })
+        -- 拉取失败：尝试用上次缓存
+        if self:fileExists(CACHE_PATH) then
+            self._offline = true
+            self._last_ok = true
+            self:showDashboard(CACHE_PATH, true)
+            if not silent then
+                UIManager:show(InfoMessage:new{ text = "离线 · 显示上次缓存", timeout = 2 })
+            end
+        else
+            if not silent then
+                UIManager:show(InfoMessage:new{ text = "刷新失败: " .. tostring(err), timeout = 3 })
+            end
         end
         logger.warn("ShawnKanban refresh failed:", err)
         return
     end
-    self:showDashboard(data)
+    -- 成功：写临时文件 + 刷新缓存 + 显示
+    if self:writePng(SCREEN_PATH, data) then
+        self:writePng(CACHE_PATH, data)   -- 同时写到缓存
+    end
+    self._offline = false
+    self._last_ok = true
+    self:showDashboard(SCREEN_PATH, false)
 end
 
--- ---------- 自动刷新（对齐整点/半点，如 08:30、09:00） ----------
+-- ---------- 自动刷新（对齐整点/半点） ----------
 local function secondsToNextSlot()
     local t = os.date("*t")
     local mins = t.min
@@ -409,7 +197,7 @@ function KindleDash:armAutoRefresh()
     if not self.auto_on then return end
     local function tick()
         if not self.auto_on then return end
-        self:refreshDashboard(true) -- 静默刷新；看板若开着则原地更新
+        self:refreshDashboard(true)
         self._auto_timer = UIManager:scheduleIn(REFRESH_SEC, tick)
     end
     local first = secondsToNextSlot()
@@ -435,21 +223,15 @@ function KindleDash:setServerAddress()
         input_hint = "例如 192.168.31.188:8787",
         buttons = {
             {
-                {
-                    text = "取消", callback = function()
+                { text = "取消", callback = function() UIManager:close(dialog) end },
+                { text = "保存", callback = function()
+                    local v = dialog:getInputValue()
+                    if v and v ~= "" then
+                        self:saveHost(v)
                         UIManager:close(dialog)
+                        UIManager:show(InfoMessage:new{ text = "已保存: " .. v, timeout = 2 })
                     end
-                },
-                {
-                    text = "保存", callback = function()
-                        local v = dialog:getInputValue()
-                        if v and v ~= "" then
-                            self:saveHost(v)
-                            UIManager:close(dialog)
-                            UIManager:show(InfoMessage:new{ text = "已保存: " .. v, timeout = 2 })
-                        end
-                    end
-                }
+                end }
             }
         }
     }
@@ -460,33 +242,20 @@ function KindleDash:addToMainMenu(menu_items)
     menu_items.kindledash = {
         text = "Shawn Kanban",
         sorting_hint = "tools",
-        callback = function()
-            self:refreshDashboard(false)
-        end,
+        callback = function() self:refreshDashboard(false) end,
         submenus = {
-            {
-                text = "刷新看板",
-                callback = function() self:refreshDashboard(false) end
-            },
-            {
-                text = "设置服务器地址",
-                callback = function() self:setServerAddress() end
-            },
-            {
-                text = "切换自动刷新 (整点/半点)",
-                callback = function() self:toggleAutoRefresh() end
-            },
-            {
-                text = "关于",
-                callback = function()
-                    UIManager:show(InfoMessage:new{
-                        text = "Shawn Kanban\n拉取 PC/Mac 的 /api/dashboard\n含限额/天气/股市/时钟/汇率\n整点/半点自动刷新，顶部下滑返回",
-                        timeout = 5
-                    })
-                end
-            }
+            { text = "刷新看板",     callback = function() self:refreshDashboard(false) end },
+            { text = "设置服务器地址", callback = function() self:setServerAddress() end },
+            { text = "切换自动刷新 (整点/半点)", callback = function() self:toggleAutoRefresh() end },
+            { text = "关于", callback = function()
+                UIManager:show(InfoMessage:new{
+                    text = "Shawn Kanban\nPC 端 /api/screen 整屏图 · ~24KB 1-bit PNG\n满屏 ImageWidget 显示\n唤醒即刷 + 30 分自动\n顶部下滑/顶部点击返回",
+                    timeout = 5
+                })
+            end }
         }
     }
 end
 
+-- 需要 GestureRange（KOReader 顶部全局已 require 过？保险起见 require）
 return KindleDash

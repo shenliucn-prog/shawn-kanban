@@ -4,19 +4,42 @@ import { paths, getConfig } from '../config.js';
 
 const WEEK = 7 * 24 * 60 * 60 * 1000;
 
-// Count assistant/user messages in ~/.claude/projects/*.jsonl over the last 7 days.
-// This is an approximation of Claude Code usage derived from local history.
+// This machine has no ~/.claude — the always-present transcript source is
+// WorkBuddy's own project transcripts under ~/.workbuddy/projects/<slug>/*.jsonl.
+// Those files carry { timestamp(ms), type, role, providerData.model, ... } but
+// NOT per-message token usage, so we derive a real "weekly activity" metric:
+//   sessions7d  = number of .jsonl files touched in the last 7 days
+//   messages7d  = number of user/assistant messages in those files
+//   lastModel   = most recent model seen (informational)
+// Actual token remaining comes from the workbuddy provider (workbuddy.db).
+
+let _cache = { at: 0, value: null };
+const CACHE_TTL = 5 * 60 * 1000;
+
 export function getClaudeCodeUsage() {
   const cap = getConfig().claudeCap;
+  const now = Date.now();
+  if (_cache.at && now - _cache.at < CACHE_TTL) return _cache.value;
+
   const dir = paths.claude;
   if (!existsSync(dir)) {
-    return { ok: false, error: 'no ~/.claude/projects', cap };
+    return { ok: false, error: 'no transcript dir', cap };
   }
-  const cutoff = Date.now() - WEEK;
-  let used = 0;
+
+  const cutoff = now - WEEK;
+  let sessions = 0;
+  let messages = 0;
+  let lastModel = null;
+
   try {
     const walk = (d) => {
-      for (const name of readdirSync(d)) {
+      let names;
+      try {
+        names = readdirSync(d);
+      } catch {
+        return;
+      }
+      for (const name of names) {
         const p = join(d, name);
         let st;
         try {
@@ -24,26 +47,47 @@ export function getClaudeCodeUsage() {
         } catch {
           continue;
         }
-        if (st.isDirectory()) walk(p);
-        else if (name.endsWith('.jsonl')) {
-          used += countRecentMessages(p, cutoff);
+        if (st.isDirectory()) {
+          if (name !== 'subagents') walk(p); // skip sub-agent transcripts
+        } else if (name.endsWith('.jsonl') && st.mtimeMs >= cutoff) {
+          sessions++;
+          const r = countRecent(p, cutoff);
+          messages += r.messages;
+          if (r.lastModel) lastModel = r.lastModel;
         }
       }
     };
     walk(dir);
   } catch (e) {
-    return { ok: false, error: e.message, cap };
+    const value = { ok: false, error: e.message, cap };
+    _cache = { at: now, value };
+    return value;
   }
-  return {
+
+  // 统一度量衡：used7d（本周消息数=已用额度）/ cap（上限）/ remaining / percent，
+  // 与 codex 结构一致，便于 UI 三行统一渲染。
+  const used7d = messages;
+  const remaining = Math.max(0, cap - used7d);
+  const percent = cap ? Math.min(100, Math.round((used7d / cap) * 100)) : 0;
+  const value = {
     ok: true,
-    used7d: used,
+    used7d,
     cap,
-    source: 'local ~/.claude/projects (approx)'
+    remaining,
+    percent,
+    unit: 'messages',
+    sessions7d: sessions,
+    messages7d: messages,
+    lastModel,
+    source: 'local .workbuddy/projects (activity)'
   };
+  _cache = { at: now, value };
+  return value;
 }
 
-function countRecentMessages(file, cutoff) {
-  let n = 0;
+function countRecent(file, cutoff) {
+  let messages = 0;
+  let lastModel = null;
   try {
     const lines = readFileSync(file, 'utf-8').split('\n');
     for (const line of lines) {
@@ -56,18 +100,24 @@ function countRecentMessages(file, cutoff) {
       }
       const ts = parseTs(o);
       if (ts == null || ts < cutoff) continue;
+      if (o.type !== 'message') continue;
       const role = o.role || (o.message && o.message.role);
-      if (role === 'user' || role === 'assistant') n++;
+      if (role === 'user' || role === 'assistant') {
+        messages++;
+        const model = o.providerData && o.providerData.model;
+        if (model) lastModel = model;
+      }
     }
   } catch {
     /* unreadable file: ignore */
   }
-  return n;
+  return { messages, lastModel };
 }
 
 function parseTs(o) {
-  const raw = o.timestamp || (o.message && o.message.timestamp) || o.created_at;
-  if (!raw) return null;
-  const t = Date.parse(raw);
+  const raw = o.timestamp ?? (o.message && o.message.timestamp) ?? o.created_at;
+  if (raw == null) return null;
+  // Numeric epoch-ms timestamps are valid as-is; strings go through Date.parse.
+  const t = typeof raw === 'number' ? raw : Date.parse(raw);
   return Number.isFinite(t) ? t : null;
 }

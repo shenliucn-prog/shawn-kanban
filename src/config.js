@@ -87,11 +87,15 @@ export function getConfig() {
 }
 
 // Where the local AI-tool history lives on each OS.
+// Note: this machine has no ~/.claude or codex; the real, always-present
+// transcript source is WorkBuddy's own project transcripts (jsonl), so we
+// point `claude` there to derive a real "weekly activity" metric.
 export const paths = {
-  claude: join(HOME, '.claude', 'projects'),
+  claude: join(HOME, '.workbuddy', 'projects'),
   codexCandidates: [
     join(HOME, '.codex'),
     join(HOME, '.config', 'codex'),
-    join(HOME, 'Library', 'Application Support', 'codex')
+    join(HOME, 'AppData', 'Roaming', 'codex'),
+    join(HOME, 'AppData', 'Local', 'codex')
   ]
 };

@@ -1,7 +1,26 @@
 import http from 'node:http';
+import { spawn } from 'node:child_process';
+import path from 'node:path';
 import { buildDashboard } from './aggregator.js';
 import { readStatus } from './db.js';
 import { config } from './config.js';
+
+const PYTHON = process.env.PYTHON_BIN || 'C:/Users/Shen/.workbuddy/binaries/python/versions/3.13.12/python.exe';
+
+function renderScreenPng() {
+  return new Promise((resolve, reject) => {
+    const script = path.join(process.cwd(), 'tools', 'render_screen.py');
+    const child = spawn(PYTHON, [script], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const chunks = [];
+    child.stdout.on('data', d => chunks.push(d));
+    child.stderr.on('data', d => process.stderr.write('[render] ' + d));
+    child.on('error', reject);
+    child.on('close', code => {
+      if (code === 0) resolve(Buffer.concat(chunks));
+      else reject(new Error('render exit code ' + code));
+    });
+  });
+}
 
 function sendJson(res, obj) {
   res.writeHead(200, {
@@ -215,6 +234,23 @@ export function createServer({ db = null, cfg = config } = {}) {
     if (url.pathname === '/api/status') {
       const status = db ? readStatus(db, { cwdFilter: cfg.cwdFilter }) : null;
       sendJson(res, { ok: true, data: status, serverTime: Date.now() });
+      return;
+    }
+
+    if (url.pathname === '/api/screen') {
+      try {
+        const png = await renderScreenPng();
+        res.writeHead(200, {
+          'Content-Type': 'image/png',
+          'Content-Length': png.length,
+          'Cache-Control': 'no-store'
+        });
+        res.end(png);
+      } catch (e) {
+        process.stderr.write('[dash] screen render failed: ' + e.message + '\n');
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('render failed: ' + e.message);
+      }
       return;
     }
 
