@@ -5,7 +5,7 @@
 16 级灰度（GRAY=128 / LIGHT_GRAY=200）最终 Floyd-Steinberg 抖动转 1-bit PNG。
 静态数据（句子库）从 data/ 读；新闻/节日/时钟/额度均由服务端提供。
 """
-import sys, os, json, math, urllib.request, argparse
+import sys, os, json, math, re, urllib.request, argparse
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
 
@@ -55,6 +55,44 @@ def clip(draw, s, font, max_w):
     while s and tw(draw, s + ell, font) > max_w:
         s = s[:-1]
     return s + ell
+
+# 自然断句：在标点/空格后切分（零宽 lookbehind，标点保留在前一段末尾）
+_SENT_SPLIT = re.compile(r'(?<=[，,。；;！？!?、：:\s])')
+
+def clip_sentence(draw, s, font, max_w):
+    """一句话新闻截断：优先在自然标点处收尾，保证整句可读且不超页宽。
+
+    1) 整句能放下 -> 原样返回
+    2) 否则按标点分段累加，取能放下的最长前缀（结尾是标点，不再加省略号）
+    3) 首段就超宽 / 断出来太短没信息量 -> 退化为硬截断加省略号
+    """
+    s = ' '.join((s or '').split())
+    if not s:
+        return s
+    if tw(draw, s, font) <= max_w:
+        return s
+    parts = [p for p in _SENT_SPLIT.split(s) if p]
+    out = ''
+    idx = 0
+    for i, p in enumerate(parts):
+        cand = out + p
+        if tw(draw, cand, font) <= max_w:
+            out = cand
+            idx = i + 1
+        else:
+            break
+    # 断句结果要有足够信息量，否则宁可硬截断
+    if not out or len(out.strip()) < 6:
+        return clip(draw, s, font, max_w)
+    # 截在逗号/顿号上、后面还有内容时，用剩余宽度把下一截填满（避免"…放榜，"这种半句）
+    if idx < len(parts) and out.rstrip()[-1] not in '。！？!?':
+        budget = max_w - tw(draw, out, font)
+        # 至少放得下 3 个字 + 省略号，否则补进去只会得到 "To…" 这种碎片
+        if budget >= 140:
+            frag = clip(draw, ''.join(parts[idx:]), font, budget)
+            if frag:
+                out = out + frag
+    return out.rstrip()
 
 def hline(draw, y, color=GRAY, width=1):
     draw.line([(PAD, y), (SCREEN_W - PAD, y)], fill=color, width=width)
@@ -109,17 +147,20 @@ def draw_title(draw, y, text):
     return y + F_TITLE + 8
 
 def draw_news(draw, d, y):
-    """今日新闻（AI 相关）"""
+    """今日新闻 · AI：中文一句话，按自然标点断句，绝不超页宽"""
     y = draw_title(draw, y, '今日新闻 · AI')
     items = (d.get('news') or {}).get('items', [])
     ff = f(F_BODY)
+    fs = f(F_SMALL)
     if not items:
-        draw.text((PAD, y), '新闻源暂不可用', fill=GRAY, font=f(F_SMALL))
+        draw.text((PAD, y), '新闻源暂不可用', fill=GRAY, font=fs)
         return y + F_SMALL
-    for i, it in enumerate(items[:3]):
-        t = it.get('title', '')
-        draw.text((PAD, y + i * (F_BODY + 6)), clip(draw, t, ff, CONTENT_W), fill=BLACK, font=ff)
-    return y + min(len(items), 3) * (F_BODY + 6)
+    n = min(len(items), 3)
+    for i in range(n):
+        line = '· ' + (items[i].get('title') or '')
+        draw.text((PAD, y + i * (F_BODY + 8)), clip_sentence(draw, line, ff, CONTENT_W),
+                  fill=BLACK, font=ff)
+    return y + n * (F_BODY + 8)
 
 def draw_ai(draw, d, y):
     """AI 额度：WorkBuddy / Claude Code / Codex 三行统一度量衡"""

@@ -1,58 +1,96 @@
 import { cached, fetchJson } from '../cache.js';
 
-// AI 相关新闻：HN Algolia（英文，真 AI 相关，稳定）为主，
-// 少数派 RSS 过滤 AI 关键词（中文）作补充。全部失败时优雅降级。
-const AI_KW = /AI|人工智能|大模型|LLM|GPT|Claude|Gemini|智能体|算力|芯片|英伟达|Copilot|OpenAI/i;
+// 今日新闻 · AI：全部走中文源，输出"一句话标题"。
+//   1) 量子位 qbitai.com/feed   —— 中文 AI 垂直，AI 密度最高
+//   2) Solidot solidot.org     —— 中文科技，标题干净短（一句话）
+//   3) 少数派 sspai.com/feed    —— 中文补充
+//   4) HN Algolia              —— 最后兜底（英文，仅在前三者全挂时出现）
+// 过滤：白名单 AI 关键词 + 软文黑名单。
+// 超长标题不在这里截断 —— 渲染端会按标点做"自然断句"截断，保证不超页宽。
+// AI 必须带词边界：否则 "Haiku"(含 ai)、"Chain"、"Detail" 都会被误判
+const AI_KW = /\bAI\b|人工智能|大模型|LLM|GPT|Claude|Gemini|智能体|Agent|算力|芯片|英伟达|NVIDIA|Hugging\s?Face|开源模型|机器人|Copilot|OpenAI|深度学习|神经网络|Transformer|推理模型|AGI/i;
+
+// 量子位/Solidot 里常见的推广、活动、招聘类标题
+const SPAM_KW = /助力|无感迁移|斩获|晋级|国赛|官宣|大会|峰会|直播|报名|招募|招聘|训练营|优惠券|折扣|领衔|生涯|同蚂蚁|国产算力|商汤大装置/;
 
 function parseRssTitles(xml, max) {
   const items = xml.match(/<item>[\s\S]*?<\/item>/g) || [];
   const out = [];
   for (const it of items) {
     const m = it.match(/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/);
-    if (m && m[1].trim()) out.push(m[1].trim());
+    if (m) {
+      const t = m[1].replace(/\s+/g, ' ').trim();
+      if (t) out.push(t);
+    }
     if (out.length >= max) break;
   }
   return out;
 }
 
+function pick(titles, source, out, max) {
+  for (const t of titles) {
+    if (out.length >= max) break;
+    if (!AI_KW.test(t)) continue;
+    if (SPAM_KW.test(t)) continue;
+    if (out.some(o => o.title === t)) continue; // 去重
+    out.push({ title: t, source });
+  }
+}
+
+async function fetchRss(url, max) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
+  try {
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; kindle-dash/1.0)', Accept: 'application/rss+xml,text/xml' }
+    });
+    if (!res.ok) throw new Error('http ' + res.status);
+    return parseRssTitles(await res.text(), max);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function getNews() {
+  // 缓存 10 分钟：Kindle 30 分钟刷新时必然拿到新数据，同时避免频繁请求源站。
   return cached('news', 10 * 60 * 1000, async () => {
     const items = [];
     const errors = [];
+    const MAX = 6;
 
-    // 1) HN Algolia：AI 相关 stories
-    const r = await fetchJson(
-      'https://hn.algolia.com/api/v1/search_by_date?query=AI&tags=story&hitsPerPage=6'
-    );
-    if (r.ok && r.data && Array.isArray(r.data.hits)) {
-      for (const h of r.data.hits) {
-        if (h.title) items.push({ title: h.title, source: 'HN' });
-        if (items.length >= 4) break;
+    const sources = [
+      ['https://www.qbitai.com/feed', '量子位'],
+      ['https://www.solidot.org/index.rss', 'Solidot'],
+      ['https://sspai.com/feed', '少数派']
+    ];
+    for (const [url, name] of sources) {
+      if (items.length >= MAX) break;
+      try {
+        pick(await fetchRss(url, 20), name, items, MAX);
+      } catch (e) {
+        errors.push(name + ': ' + e.message);
       }
-    } else {
-      errors.push('hn: ' + (r.error || 'fail'));
     }
 
-    // 2) 少数派 RSS：过滤 AI 关键词（中文补充）
-    try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 8000);
-      const res = await fetch('https://sspai.com/feed', {
-        signal: ctrl.signal,
-        headers: { 'User-Agent': 'kindle-dash/1.0', Accept: 'application/rss+xml' }
-      });
-      clearTimeout(timer);
-      const xml = await res.text();
-      for (const t of parseRssTitles(xml, 12)) {
-        if (AI_KW.test(t)) items.push({ title: t, source: '少数派' });
+    // 兜底：中文源全挂时才用英文 HN
+    if (!items.length) {
+      const r = await fetchJson(
+        'https://hn.algolia.com/api/v1/search_by_date?query=AI&tags=story&hitsPerPage=6'
+      );
+      if (r.ok && r.data && Array.isArray(r.data.hits)) {
+        for (const h of r.data.hits) {
+          if (h.title) items.push({ title: h.title, source: 'HN' });
+          if (items.length >= 3) break;
+        }
+      } else {
+        errors.push('hn: ' + (r.error || 'fail'));
       }
-    } catch (e) {
-      errors.push('sspai: ' + e.message);
     }
 
     if (!items.length) {
       return { ok: false, error: errors.join('; ') || 'no news', items: [] };
     }
-    return { ok: true, items: items.slice(0, 5), source: 'hn.algolia + sspai' };
+    return { ok: true, items: items.slice(0, MAX), source: 'qbitai + solidot + sspai' };
   });
 }
