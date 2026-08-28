@@ -29,11 +29,16 @@ API = "https://api.github.com"
 
 
 def token():
+    """读取 token。对 BOM / 换行 / 空格免疫 —— 用记事本粘贴保存也能直接用。
+    utf-8-sig 会自动吞掉 BOM；strip() 去掉记事本可能加的换行。"""
     if not os.path.exists(TOKEN_FILE):
         sys.exit("缺少 token 文件: " + TOKEN_FILE)
-    t = open(TOKEN_FILE, encoding="utf-8").read().strip()
+    with open(TOKEN_FILE, encoding="utf-8-sig") as f:
+        t = f.read().strip()
     if not t:
         sys.exit("token 文件为空")
+    # 只保留 token 本体：有些编辑器会塞奇怪的不可见字符
+    t = "".join(ch for ch in t if ch.isprintable()).strip()
     return t
 
 

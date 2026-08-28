@@ -1,30 +1,33 @@
 @echo off
-chcp 65001 >nul
-title Shawn Kanban - è®¾ç½® GitHub Token
-cd /d C:\Users\Shen\.workbuddy\binaries\gh
+title Shawn Kanban - ÉèÖÃ GitHub Token
+cd /d C://Users//Shen//.workbuddy//binaries//gh
 
 echo ============================================================
-echo   ç²˜è´´ä½ çš„ GitHub Personal Access Token
+echo   Õ³ÌùÄãµÄ GitHub Personal Access Token
 echo.
-echo   ç”Ÿæˆåœ°å€: https://github.com/settings/tokens/new
-echo   éœ€è¦å‹¾é€‰: repo  å’Œ  workflow
+echo   Éú³ÉµØÖ·: https://github.com/settings/tokens/new
+echo   ¹´Ñ¡: repo  ºÍ  workflow
 echo.
-echo   ç²˜è´´åæŒ‰å›è½¦ï¼ˆå±å¹•ä¸Šçœ‹ä¸åˆ°è¾“å…¥ï¼Œè¿™æ˜¯æ­£å¸¸çš„ï¼‰
+echo   Õ³Ìùºó°´»Ø³µ
 echo ============================================================
 echo.
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$s = Read-Host 'Token' -AsSecureString;" ^
-  "$b = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($s);" ^
-  "$p = [Runtime.InteropServices.Marshal]::PtrToStringAuto($b).Trim();" ^
-  "[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b);" ^
-  "if ($p -eq '') { Write-Host ''; Write-Host 'Token ä¸ºç©ºï¼Œæœªå†™å…¥ã€‚' -ForegroundColor Red; exit 1 };" ^
-  "Set-Content -LiteralPath 'C:\Users\Shen\.workbuddy\binaries\gh\token.txt' -Value $p -NoNewline -Encoding ascii;" ^
-  "Write-Host '';" ^
-  "Write-Host ('å·²å†™å…¥ ' + $p.Length + ' ä¸ªå­—ç¬¦åˆ° token.txt') -ForegroundColor Green;" ^
-  "Write-Host ('å‰ç¼€: ' + $p.Substring(0, [Math]::Min(7, $p.Length)) + '...') -ForegroundColor Gray"
+set "TOK="
+set /p "TOK=Token: "
+
+if not defined TOK (
+  echo.
+  echo Token Îª¿Õ£¬Î´Ğ´Èë¡£
+  pause
+  exit /b 1
+)
+
+<nul set /p="%TOK%" > token.txt
 
 echo.
-echo å®Œæˆåå›åˆ°å¯¹è¯é‡Œè¯´ä¸€å£°ï¼Œæˆ‘æ¥åšå‰©ä¸‹çš„éƒ¨ç½²ã€‚
+echo ÒÑĞ´Èë token.txt
+for %%F in (token.txt) do echo   ´óĞ¡: %%~zF ×Ö½Ú
+echo.
+echo »Øµ½¶Ô»°ÀïËµÒ»Éù£¬ÎÒÀ´×öÊ£ÏÂµÄ²¿Êğ¡£
 echo.
 pause
