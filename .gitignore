@@ -29,3 +29,6 @@ tools/*.log
 tools/__pycache__/
 tools/tmp/
 *.pyc
+
+# 本机上报的额度快照（由上报器通过 GitHub API 推送，不进 git）
+data/quotas.json
