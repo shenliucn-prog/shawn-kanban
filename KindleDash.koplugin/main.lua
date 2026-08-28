@@ -74,9 +74,16 @@ end
 -- ---------- 拉取屏幕 ----------
 function KindleDash:fetchScreen()
     local url = "http://" .. self.host .. "/api/screen"
-    local body, code = http.request(url)
+    local ok, body, code = pcall(function() return http.request(url) end)
+    if not ok then
+        return nil, "request error: " .. tostring(body)
+    end
     if not body or body == "" or code ~= 200 then
         return nil, "fetch failed (" .. tostring(code) .. ")"
+    end
+    -- /api/screen 出错时会返回 text/plain，必须确认拿到的是真 PNG，否则 ImageWidget 会炸
+    if body:sub(1, 4) ~= "\137PNG" then
+        return nil, "not a PNG (" .. tostring(body):sub(1, 60) .. ")"
     end
     return body, nil
 end
@@ -107,6 +114,18 @@ function KindleDash:showDashboard(img_path, offline)
     local h = Screen:getHeight()
     logger.info("ShawnKanban showDashboard screen=", w, "x", h, "img=", img_path)
 
+    -- 整块构建包 pcall：ImageWidget 解码/渲染抛错时只弹提示，绝不把 KOReader 打回桌面
+    local ok, err = pcall(function() self:buildScreen(img_path, w, h) end)
+    if not ok then
+        logger.err("ShawnKanban showDashboard failed: ", tostring(err))
+        UIManager:show(InfoMessage:new{
+            text = "看板显示失败:\n" .. tostring(err),
+            timeout = 8,
+        })
+    end
+end
+
+function KindleDash:buildScreen(img_path, w, h)
     -- ImageWidget 满屏显示
     -- file_do_cache=false: 切换图时强制重新解码；close 时 ImageWidget:free() 释放 BlitBuffer
     local img = ImageWidget:new{
@@ -157,6 +176,15 @@ function KindleDash:showDashboard(img_path, offline)
 end
 
 -- ---------- 刷新（含离线缓存兜底） ----------
+-- 菜单入口：任何异常都收敛成提示，避免把 KOReader 打回桌面
+function KindleDash:safeRefresh()
+    local ok, err = pcall(function() self:refreshDashboard(false) end)
+    if not ok then
+        logger.err("ShawnKanban refresh crashed: ", tostring(err))
+        UIManager:show(InfoMessage:new{ text = "看板失败:\n" .. tostring(err), timeout = 8 })
+    end
+end
+
 function KindleDash:refreshDashboard(silent)
     local data, err = self:fetchScreen()
     if not data then
@@ -197,7 +225,8 @@ function KindleDash:armAutoRefresh()
     if not self.auto_on then return end
     local function tick()
         if not self.auto_on then return end
-        self:refreshDashboard(true)
+        -- 定时器里出错也必须续上下一次，且不能崩
+        pcall(function() self:refreshDashboard(true) end)
         self._auto_timer = UIManager:scheduleIn(REFRESH_SEC, tick)
     end
     local first = secondsToNextSlot()
@@ -242,9 +271,9 @@ function KindleDash:addToMainMenu(menu_items)
     menu_items.kindledash = {
         text = "Shawn Kanban",
         sorting_hint = "tools",
-        callback = function() self:refreshDashboard(false) end,
+        callback = function() self:safeRefresh() end,
         submenus = {
-            { text = "刷新看板",     callback = function() self:refreshDashboard(false) end },
+            { text = "刷新看板",     callback = function() self:safeRefresh() end },
             { text = "设置服务器地址", callback = function() self:setServerAddress() end },
             { text = "切换自动刷新 (整点/半点)", callback = function() self:toggleAutoRefresh() end },
             { text = "关于", callback = function()
