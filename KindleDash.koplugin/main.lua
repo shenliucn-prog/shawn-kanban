@@ -15,14 +15,18 @@ local GestureRange = require("ui/gesturerange")
 local http = require("socket.http")
 local LuaSettings = require("luasettings")
 local DataStorage = require("datastorage")
+local lfs = require("lfs")
 local logger = require("logger")
+
+-- 网络请求超时：电脑关机时不要让用户等太久，8 秒无响应就切换离线缓存
+http.TIMEOUT = 8
 
 local REFRESH_SEC = 30 * 60
 local DEFAULT_HOST = "192.168.31.188"
 local DEFAULT_PORT = "8787"
--- KOReader 上可写临时目录（restart 后丢失；offline 缓存用同一目录）
-local SCREEN_PATH = "/tmp/dash_screen.png"
-local CACHE_PATH = "/tmp/dash_screen_cache.png"
+-- 缓存存到 settings 目录（/mnt/us/koreader/settings/），Kindle 重启后仍在
+local CACHE_IMG_NAME = "kindledash_screen.png"
+local CACHE_TS_NAME  = "kindledash_ts.txt"
 
 local KindleDash = WidgetContainer:new{
     name = "KindleDash",
@@ -45,6 +49,35 @@ end
 function KindleDash:settingsPath()
     return DataStorage:getSettingsDir() .. "/kindledash.lua"
 end
+function KindleDash:cacheDir()
+    return DataStorage:getSettingsDir()
+end
+function KindleDash:cacheImg()
+    return self:cacheDir() .. "/" .. CACHE_IMG_NAME
+end
+function KindleDash:cacheTs()
+    return self:cacheDir() .. "/" .. CACHE_TS_NAME
+end
+function KindleDash:ensureCacheDir()
+    local dir = self:cacheDir()
+    if lfs.attributes(dir, "mode") ~= "directory" then
+        lfs.mkdir(dir)
+    end
+end
+function KindleDash:readTs()
+    local f = io.open(self:cacheTs(), "rb")
+    if not f then return nil end
+    local s = f:read("*a"); f:close()
+    return s and s:match("^%s*(.-)%s*$") or nil
+end
+function KindleDash:writeTs(s)
+    self:ensureCacheDir()
+    local f, err = io.open(self:cacheTs(), "wb")
+    if not f then return nil, err end
+    f:write(s or ""); f:close()
+    return true
+end
+
 function KindleDash:loadHost()
     local host, port = DEFAULT_HOST, DEFAULT_PORT
     local ok, s = pcall(function() return LuaSettings:open(self:settingsPath()) end)
@@ -88,8 +121,9 @@ function KindleDash:fetchScreen()
     return body, nil
 end
 
--- 保存 PNG 到临时文件（ImageWidget 需要 file 或 BlitBuffer，用 file 最稳）
+-- 保存 PNG 到文件（缓存目录持久化，Kindle 重启后仍在）
 function KindleDash:writePng(path, data)
+    self:ensureCacheDir()
     local f, err = io.open(path, "wb")
     if not f then return nil, err end
     f:write(data)
@@ -187,14 +221,17 @@ end
 
 function KindleDash:refreshDashboard(silent)
     local data, err = self:fetchScreen()
+    local cacheImg = self:cacheImg()
     if not data then
-        -- 拉取失败：尝试用上次缓存
-        if self:fileExists(CACHE_PATH) then
+        -- 拉取失败：用持久缓存（Kindle 重启后仍在）
+        if self:fileExists(cacheImg) then
             self._offline = true
             self._last_ok = true
-            self:showDashboard(CACHE_PATH, true)
+            self:showDashboard(cacheImg, true)
             if not silent then
-                UIManager:show(InfoMessage:new{ text = "离线 · 显示上次缓存", timeout = 2 })
+                local ts = self:readTs()
+                local msg = ts and ("离线 · 最后 " .. ts) or "离线 · 显示上次缓存"
+                UIManager:show(InfoMessage:new{ text = msg, timeout = 2 })
             end
         else
             if not silent then
@@ -204,13 +241,13 @@ function KindleDash:refreshDashboard(silent)
         logger.warn("ShawnKanban refresh failed:", err)
         return
     end
-    -- 成功：写临时文件 + 刷新缓存 + 显示
-    if self:writePng(SCREEN_PATH, data) then
-        self:writePng(CACHE_PATH, data)   -- 同时写到缓存
+    -- 成功：写持久缓存 + 时间戳 + 显示
+    if self:writePng(cacheImg, data) then
+        self:writeTs(os.date("%H:%M"))
     end
     self._offline = false
     self._last_ok = true
-    self:showDashboard(SCREEN_PATH, false)
+    self:showDashboard(cacheImg, false)
 end
 
 -- ---------- 自动刷新（对齐整点/半点） ----------
@@ -278,7 +315,7 @@ function KindleDash:addToMainMenu(menu_items)
             { text = "切换自动刷新 (整点/半点)", callback = function() self:toggleAutoRefresh() end },
             { text = "关于", callback = function()
                 UIManager:show(InfoMessage:new{
-                    text = "Shawn Kanban\nPC 端 /api/screen 整屏图 · ~24KB 1-bit PNG\n满屏 ImageWidget 显示\n唤醒即刷 + 30 分自动\n顶部下滑/顶部点击返回",
+                    text = "Shawn Kanban\nPC 端 /api/screen 整屏图 · ~24KB 1-bit PNG\n满屏 ImageWidget 显示\n唤醒即刷 + 30 分自动\n离线用 settings 目录持久缓存\n顶部下滑/顶部点击返回",
                     timeout = 5
                 })
             end }

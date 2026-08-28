@@ -23,8 +23,19 @@ const CN = {
 const DAY = 24 * 60 * 60 * 1000;
 const pad = (n) => String(n).padStart(2, '0');
 
+// 兜底：schedule 不带 hydrate 时 team 只剩 {id,name}，用 id 反查中文
+const ID_CN = {
+  108: '天使', 109: '响尾蛇', 110: '金莺', 111: '红袜', 112: '小熊', 113: '红人',
+  114: '守护者', 115: '洛基', 116: '老虎', 117: '太空人', 118: '皇家', 119: '道奇',
+  120: '国民', 121: '大都会', 133: '运动家', 134: '海盗', 135: '教士', 136: '水手',
+  137: '巨人', 138: '红雀', 139: '光芒', 140: '游骑兵', 141: '蓝鸟', 142: '双城',
+  143: '费城人', 144: '勇士', 145: '白袜', 146: '马林鱼', 147: '洋基', 158: '酿酒人'
+};
+
 function cnName(team) {
-  return CN[team?.abbreviation] || team?.clubName || team?.name || '?';
+  return (
+    CN[team?.abbreviation] || ID_CN[team?.id] || team?.clubName || team?.name || '?'
+  );
 }
 
 // UTC 毫秒 -> 北京时间 的 "MM-DD HH:mm"
@@ -45,7 +56,9 @@ async function fetchSchedule(teamId, now) {
     'https://statsapi.mlb.com/api/v1/schedule?sportId=1&teamId=' +
     teamId +
     '&startDate=' + ymd(new Date(now - 14 * DAY)) +
-    '&endDate=' + ymd(new Date(now + 14 * DAY));
+    '&endDate=' + ymd(new Date(now + 14 * DAY)) +
+    // 不加 hydrate 时 team 只剩 {id,name}，拿不到 abbreviation
+    '&hydrate=team';
   // StatsAPI 偶发超时，失败重试一次
   let r = await fetchJson(url, { timeoutMs: 12000 });
   if (!r.ok) r = await fetchJson(url, { timeoutMs: 15000 });

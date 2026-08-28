@@ -271,14 +271,18 @@ def draw_mlb(draw, d, y):
     name_w = 80
     col_a = PAD + name_w
     col_b = PAD + name_w + 410
+
+    def mark_of(g):
+        # "@勇士" 紧凑；"vs 海盗" 加空格更好读
+        return 'vs ' if g.get('home') else '@'
+
     for i, it in enumerate(items[:2]):
         ry = y + i * (F_BODY + 8)
         draw.text((PAD, ry), it.get('cn', ''), fill=BLACK, font=f(F_BODY, bold=True))
         last = it.get('last') or {}
         nxt = it.get('next') or {}
         if last:
-            mark = 'vs' if last.get('home') else '@'
-            s = '%s %s%s %s-%s' % (last.get('date', ''), mark, last.get('opp', ''),
+            s = '%s %s%s %s-%s' % (last.get('date', ''), mark_of(last), last.get('opp', ''),
                                    last.get('us', 0), last.get('them', 0))
             draw.text((col_a, ry), s, fill=GRAY, font=ff)
             res = '胜' if last.get('win') else '负'
@@ -288,8 +292,8 @@ def draw_mlb(draw, d, y):
         else:
             draw.text((col_a, ry), '无近期战报', fill=GRAY, font=fs)
         if nxt:
-            mark = 'vs' if nxt.get('home') else '@'
-            s2 = '→ %s %s %s%s' % (nxt.get('date', ''), nxt.get('time', ''), mark, nxt.get('opp', ''))
+            s2 = '→ %s %s %s%s' % (nxt.get('date', ''), nxt.get('time', ''),
+                                   mark_of(nxt), nxt.get('opp', ''))
             draw.text((col_b, ry), clip(draw, s2, ff, SCREEN_W - PAD - col_b), fill=BLACK, font=ff)
     return y + min(len(items), 2) * (F_BODY + 8)
 
