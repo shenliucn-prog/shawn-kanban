@@ -259,26 +259,39 @@ def draw_clocks(draw, d, y):
             draw.text((x + cw + dw2 + 24, ry + 6), date_s, fill=GRAY, font=fs)
     return y + math.ceil(len(cl) / 2) * (F_BODY + 8)
 
-def draw_festivals(draw, d, y):
-    """公历节日倒计时（服务端提供，真实节日）"""
-    y = draw_title(draw, y, '节日倒计时')
-    items = (d.get('festivals') or {}).get('items', [])
+def draw_mlb(draw, d, y):
+    """MLB · 道奇 / 教士：上一场比分 + 下一场时间（均为北京时间）"""
+    y = draw_title(draw, y, 'MLB · 道奇 / 教士')
+    items = (d.get('mlb') or {}).get('items', [])
     ff = f(F_BODY)
     fs = f(F_SMALL)
     if not items:
-        draw.text((PAD, y), '暂无节日', fill=GRAY, font=fs)
+        draw.text((PAD, y), '赛程暂不可用', fill=GRAY, font=fs)
         return y + F_SMALL
-    for i, it in enumerate(items[:3]):
-        ry = y + i * (F_BODY + 6)
-        name = it.get('name', '')
-        days = it.get('days')
-        draw.text((PAD, ry), name, fill=BLACK, font=ff)
-        nw = tw(draw, name, ff)
-        txt = '%s天' % days if days is not None else '?'
-        draw.text((PAD + nw + 16, ry + 4), txt, fill=BLACK, font=ff)
-        dw2 = tw(draw, txt, ff)
-        draw.text((PAD + nw + dw2 + 32, ry + 8), it.get('date', ''), fill=GRAY, font=fs)
-    return y + min(len(items), 3) * (F_BODY + 6)
+    name_w = 80
+    col_a = PAD + name_w
+    col_b = PAD + name_w + 410
+    for i, it in enumerate(items[:2]):
+        ry = y + i * (F_BODY + 8)
+        draw.text((PAD, ry), it.get('cn', ''), fill=BLACK, font=f(F_BODY, bold=True))
+        last = it.get('last') or {}
+        nxt = it.get('next') or {}
+        if last:
+            mark = 'vs' if last.get('home') else '@'
+            s = '%s %s%s %s-%s' % (last.get('date', ''), mark, last.get('opp', ''),
+                                   last.get('us', 0), last.get('them', 0))
+            draw.text((col_a, ry), s, fill=GRAY, font=ff)
+            res = '胜' if last.get('win') else '负'
+            # 胜=黑，负=灰：e-ink 上靠明度区分，不用颜色
+            draw.text((col_a + tw(draw, s, ff) + 12, ry), res,
+                      fill=BLACK if last.get('win') else GRAY, font=f(F_BODY, bold=True))
+        else:
+            draw.text((col_a, ry), '无近期战报', fill=GRAY, font=fs)
+        if nxt:
+            mark = 'vs' if nxt.get('home') else '@'
+            s2 = '→ %s %s %s%s' % (nxt.get('date', ''), nxt.get('time', ''), mark, nxt.get('opp', ''))
+            draw.text((col_b, ry), clip(draw, s2, ff, SCREEN_W - PAD - col_b), fill=BLACK, font=ff)
+    return y + min(len(items), 2) * (F_BODY + 8)
 
 def draw_quote(draw, d, y, quotes):
     y = draw_title(draw, y, '今日一句')
@@ -326,7 +339,7 @@ def render(d, out_path=None):
         lambda y: draw_weather(draw, d, y),
         lambda y: draw_market(draw, d, y),
         lambda y: draw_clocks(draw, d, y),
-        lambda y: draw_festivals(draw, d, y),
+        lambda y: draw_mlb(draw, d, y),
         lambda y: draw_quote(draw, d, y, quotes)
     ]
     for fn in mods:

@@ -6,16 +6,17 @@ import { getStocks } from './providers/stocks.js';
 import { getClocks } from './providers/clocks.js';
 import { getFx } from './providers/fx.js';
 import { getNews } from './providers/news.js';
-import { getFestivals } from './providers/festivals.js';
+import { getMlb } from './providers/mlb.js';
 
 // Aggregate every section into a single dashboard payload.
 // Network calls run concurrently; local calls are synchronous.
 export async function buildDashboard(db) {
-  const [weather, stocks, fx, news] = await Promise.all([
+  const [weather, stocks, fx, news, mlb] = await Promise.all([
     getWeather(),
     getStocks(),
     getFx(),
-    getNews()
+    getNews(),
+    getMlb()
   ]);
 
   return {
@@ -31,6 +32,6 @@ export async function buildDashboard(db) {
     clocks: getClocks(),
     fx,
     news,
-    festivals: getFestivals()
+    mlb
   };
 }
