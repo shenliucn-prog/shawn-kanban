@@ -27,13 +27,24 @@ function parseRssTitles(xml, max) {
   return out;
 }
 
+// 视觉宽度权重：中文/全角算 2，英文数字算 1。
+// 页宽 992px、正文 34px → 全角约 34px/字 → 1 单位 ≈ 17px → 一行上限 ≈ 58 单位。
+// 一句话新闻 = 按权重升序选最短的几条，保证整行放得下、不出现省略号。
+function visualLen(s) {
+  let n = 0;
+  for (const ch of s) {
+    n += /[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]/.test(ch) ? 2 : 1;
+  }
+  return n;
+}
+
 function pick(titles, source, out, max) {
   for (const t of titles) {
-    if (out.length >= max) break;
+    if (out.length >= max * 4) break; // 多收一些候选，排序后再截
     if (!AI_KW.test(t)) continue;
     if (SPAM_KW.test(t)) continue;
     if (out.some(o => o.title === t)) continue; // 去重
-    out.push({ title: t, source });
+    out.push({ title: t, source, len: visualLen(t) });
   }
 }
 
@@ -64,14 +75,22 @@ export function getNews() {
       ['https://www.solidot.org/index.rss', 'Solidot'],
       ['https://sspai.com/feed', '少数派']
     ];
+
+    // 先抓齐，避免为了两轮筛选重复请求源站
+    const gathered = [];
     for (const [url, name] of sources) {
-      if (items.length >= MAX) break;
       try {
-        pick(await fetchRss(url, 20), name, items, MAX);
+        gathered.push({ titles: await fetchRss(url, 20), name });
       } catch (e) {
         errors.push(name + ': ' + e.message);
       }
     }
+
+    for (const g of gathered) {
+      pick(g.titles, g.name, items, MAX);
+    }
+    // 一句话新闻：短的优先。Array.sort 稳定，同长度保持源顺序
+    items.sort((a, b) => a.len - b.len);
 
     // 兜底：中文源全挂时才用英文 HN
     if (!items.length) {
