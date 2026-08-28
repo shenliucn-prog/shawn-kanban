@@ -1,0 +1,45 @@
+{
+  "ts": 1787938209358,
+  "host": "DESKTOP-P8BFJDJ",
+  "quotas": {
+    "workbuddy": {
+      "ok": true,
+      "model": "hy4-preview",
+      "title": "排查存剧推送到 git 的问题",
+      "token": {
+        "used": 207692,
+        "size": 1000000,
+        "remaining": 792308,
+        "percent": 20.8
+      },
+      "used": 207692,
+      "cap": 1000000,
+      "remaining": 792308,
+      "percent": 20.8,
+      "unit": "tokens",
+      "lastActivityAt": 1787937904713,
+      "source": "session"
+    },
+    "claudecode": {
+      "ok": true,
+      "used7d": 324,
+      "cap": 1000,
+      "remaining": 676,
+      "percent": 32,
+      "unit": "messages",
+      "sessions7d": 5,
+      "messages7d": 324,
+      "lastModel": "hy4-preview",
+      "source": "local .workbuddy/projects (activity)"
+    },
+    "codex": {
+      "ok": false,
+      "error": "not-installed",
+      "cap": 500,
+      "used7d": null,
+      "remaining": null,
+      "percent": 0,
+      "unit": "messages"
+    }
+  }
+}

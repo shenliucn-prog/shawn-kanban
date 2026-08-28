@@ -7,10 +7,41 @@ import { getClocks } from './providers/clocks.js';
 import { getFx } from './providers/fx.js';
 import { getNews } from './providers/news.js';
 import { getMlb } from './providers/mlb.js';
+import { getReported } from './reported.js';
+import { getConfig } from './config.js';
+
+// local 模式：直接读本机 DB 与本地日志。
+function quotasLocal(db) {
+  return {
+    workbuddy: getWorkbuddy(db),
+    claudecode: getClaudeCodeUsage(),
+    codex: getCodexUsage()
+  };
+}
+
+// cloud 模式：没有本地 DB，用本机上报器推上来的 data/quotas.json。
+// stale 时打上标记，看板会显示"电脑离线"而不是假装数据新鲜。
+function quotasCloud() {
+  const r = getReported();
+  const wrap = (v) => {
+    if (!v) {
+      return { ok: false, error: 'no report', unit: '', used: null, cap: null, remaining: null, percent: 0, stale: true };
+    }
+    return { ...v, stale: r.stale };
+  };
+  return {
+    workbuddy: wrap(r.quotas && r.quotas.workbuddy),
+    claudecode: wrap(r.quotas && r.quotas.claudecode),
+    codex: wrap(r.quotas && r.quotas.codex)
+  };
+}
 
 // Aggregate every section into a single dashboard payload.
 // Network calls run concurrently; local calls are synchronous.
 export async function buildDashboard(db) {
+  const cfg = getConfig();
+  const cloud = cfg.mode === 'cloud';
+
   const [weather, stocks, fx, news, mlb] = await Promise.all([
     getWeather(),
     getStocks(),
@@ -19,14 +50,15 @@ export async function buildDashboard(db) {
     getMlb()
   ]);
 
+  const reported = cloud ? getReported() : null;
+
   return {
     ok: true,
     serverTime: Date.now(),
-    quotas: {
-      workbuddy: getWorkbuddy(db),
-      claudecode: getClaudeCodeUsage(),
-      codex: getCodexUsage()
-    },
+    mode: cloud ? 'cloud' : 'local',
+    // 电脑是否还"活着"：local 模式永远在线；cloud 模式看上报是否新鲜
+    pcOnline: cloud ? !!(reported && reported.ok && !reported.stale) : true,
+    quotas: cloud ? quotasCloud() : quotasLocal(db),
     weather,
     stocks,
     clocks: getClocks(),

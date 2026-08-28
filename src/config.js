@@ -54,7 +54,14 @@ function buildConfig() {
     claudeCap: Number(fileConfig.claudeCap ?? 1000),
     codexCap: Number(fileConfig.codexCap ?? 500),
 
-    staleMs: Number(fileConfig.staleMs ?? 10 * 60 * 1000)
+    staleMs: Number(fileConfig.staleMs ?? 10 * 60 * 1000),
+
+    // 运行模式：local = 直接读本机 DB；cloud = 无 DB，用本机上报上来的 data/quotas.json
+    mode: fileConfig.mode ?? 'local',
+    // 上报额度文件（cloud 模式读取，本机上报器写入）
+    quotasFile: join(process.cwd(), 'data', 'quotas.json'),
+    // 上报数据超过这个时长没更新，就在看板上标成"电脑离线"
+    reportStaleMs: Number(fileConfig.reportStaleMs ?? 15 * 60 * 1000)
   };
 
   // Environment overrides (documented in README).
@@ -75,6 +82,9 @@ function buildConfig() {
   }
   if (env.DASH_CLAUDE_CAP) cfg.claudeCap = Number(env.DASH_CLAUDE_CAP);
   if (env.DASH_CODEX_CAP) cfg.codexCap = Number(env.DASH_CODEX_CAP);
+  if (env.SHAWN_MODE) cfg.mode = env.SHAWN_MODE;
+  if (env.SHAWN_QUOTAS_FILE) cfg.quotasFile = env.SHAWN_QUOTAS_FILE;
+  if (env.SHAWN_REPORT_STALE_MS) cfg.reportStaleMs = Number(env.SHAWN_REPORT_STALE_MS);
 
   return cfg;
 }

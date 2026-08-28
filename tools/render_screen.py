@@ -15,8 +15,47 @@ PAD = 40
 CONTENT_W = SCREEN_W - 2 * PAD
 BLACK, GRAY, LIGHT_GRAY, WHITE = 0, 128, 200, 255
 
-FONT_REG = r"C:/Windows/Fonts/msyh.ttc"
-FONT_BOLD = r"C:/Windows/Fonts/msyhbd.ttc"
+# 字体：本机用微软雅黑，Linux/CI 用开源 Noto Sans CJK。
+# 优先级：环境变量 > 候选路径 > 默认值。找不到时 f() 会退回 load_default（不显示中文）。
+LINUX_REG = [
+    '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+    '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+    '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
+    '/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf',
+    './fonts/NotoSansSC-Regular.otf',
+    './fonts/NotoSansCJKsc-Regular.otf',
+]
+LINUX_BOLD = [
+    '/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc',
+    '/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc',
+    '/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc',
+    '/usr/share/fonts/opentype/noto/NotoSansCJKsc-Bold.otf',
+    './fonts/NotoSansSC-Bold.otf',
+    './fonts/NotoSansCJKsc-Bold.otf',
+]
+WIN_REG = r"C:/Windows/Fonts/msyh.ttc"
+WIN_BOLD = r"C:/Windows/Fonts/msyhbd.ttc"
+
+
+def _pick_font(env_key, candidates, fallback):
+    p = os.environ.get(env_key)
+    if p and os.path.exists(p):
+        return p
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return fallback
+
+
+def _font_candidates():
+    if os.name == 'nt':
+        return LINUX_REG + [WIN_REG], LINUX_BOLD + [WIN_BOLD]
+    return LINUX_REG + [WIN_REG], LINUX_BOLD + [WIN_BOLD]
+
+
+_REG_CANDS, _BOLD_CANDS = _font_candidates()
+FONT_REG = _pick_font('SHAWN_FONT_REG', _REG_CANDS, WIN_REG)
+FONT_BOLD = _pick_font('SHAWN_FONT_BOLD', _BOLD_CANDS, WIN_BOLD)
 
 F_DATE = 96
 F_MONTH = 46
@@ -164,7 +203,9 @@ def draw_news(draw, d, y):
 
 def draw_ai(draw, d, y):
     """AI 额度：WorkBuddy / Claude Code / Codex 三行统一度量衡"""
-    y = draw_title(draw, y, 'AI 额度')
+    # cloud 模式下若本机久未上报，标题直接点明"电脑离线"，不拿旧值假装新鲜
+    title = 'AI 额度' if d.get('pcOnline', True) else 'AI 额度 · 电脑离线'
+    y = draw_title(draw, y, title)
     q = d.get('quotas', {})
     rows = [
         ('WorkBuddy', q.get('workbuddy', {})),
@@ -367,6 +408,11 @@ def main():
     ap.add_argument('--data')
     ap.add_argument('--url', default='http://127.0.0.1:8787/api/dashboard')
     a = ap.parse_args()
+    # CI 上字体找错会渲染成方块，打出来便于排查
+    print('[render] font_reg=%s%s' % (FONT_REG, '' if os.path.exists(FONT_REG) else '  <-- 缺失!'),
+          file=sys.stderr, flush=True)
+    print('[render] font_bold=%s%s' % (FONT_BOLD, '' if os.path.exists(FONT_BOLD) else '  <-- 缺失!'),
+          file=sys.stderr, flush=True)
     d = json.load(open(a.data, encoding='utf-8')) if a.data else fetch_dashboard(a.url)
     render(d, a.out)
 
