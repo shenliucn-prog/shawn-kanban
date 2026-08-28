@@ -27,4 +27,5 @@ tools/*.png
 # runtime logs / cache
 tools/*.log
 tools/__pycache__/
+tools/tmp/
 *.pyc
