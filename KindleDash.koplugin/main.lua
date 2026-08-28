@@ -1,7 +1,13 @@
--- Shawn Kanban · Kindle 端显示插件（混合路线 v1）
--- 拉取 PC 端 /api/screen 渲染好的整屏 PNG（1-bit 抖动 / ~24KB），
--- 用 ImageWidget 满屏显示。排版/字体/灰度/抖动全部在 PC 端完成。
--- 自动刷新：onResume 唤醒即刷 + 30 分钟定时器；离线时用上次缓存。
+-- Shawn Kanban · Kindle 端显示插件（混合路线 v2）
+-- 拉取渲染好的整屏 PNG（1072x1448，1-bit 抖动 / ~30KB），用 ImageWidget 满屏显示。
+-- 排版/字体/灰度/抖动全部在渲染端完成，Kindle 只负责取图与显示。
+--
+-- 取图三级降级链（关键：电脑关机也能拿到新内容）：
+--   1) 局域网 PC（/api/screen）—— 数据最新最全，电脑关机时连不上
+--   2) 云端静态图（GitHub Pages）—— 由 Actions 每 15 分钟渲染，电脑关机仍可用
+--   3) 本地持久缓存（settings 目录）—— 网络全断时显示最后一次的图
+--
+-- 自动刷新：onResume 唤醒即刷 + 30 分钟定时器。
 
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local UIManager = require("ui/uimanager")
@@ -24,9 +30,13 @@ http.TIMEOUT = 8
 local REFRESH_SEC = 30 * 60
 local DEFAULT_HOST = "192.168.31.188"
 local DEFAULT_PORT = "8787"
+-- 云端静态图完整 URL（GitHub Pages），留空则只用局域网
+local DEFAULT_CLOUD = ""
 -- 缓存存到 settings 目录（/mnt/us/koreader/settings/），Kindle 重启后仍在
 local CACHE_IMG_NAME = "kindledash_screen.png"
 local CACHE_TS_NAME  = "kindledash_ts.txt"
+-- KOReader 自带的 CA 证书，用于校验 https
+local CA_BUNDLE = DataStorage:getDataDir() .. "/ca-bundle.crt"
 
 local KindleDash = WidgetContainer:new{
     name = "KindleDash",
@@ -37,10 +47,12 @@ local KindleDash = WidgetContainer:new{
 function KindleDash:init()
     self.auto_on = true
     self.host = self:loadHost()
+    self.cloud = self:loadCloud()
     self.dash_widget = nil
     self._auto_timer = nil
     self._last_ok = false
     self._offline = false
+    self._source = nil   -- 本次图像来自哪里：本机 / 云端 / 缓存
     self:armAutoRefresh()
     self.ui.menu:registerToMainMenu(self)
 end
@@ -104,21 +116,81 @@ function KindleDash:saveHost(host)
     self.host = host
 end
 
+function KindleDash:loadCloud()
+    local ok, s = pcall(function() return LuaSettings:open(self:settingsPath()) end)
+    if ok and s and s:has("cloud") then
+        return s:readSetting("cloud") or DEFAULT_CLOUD
+    end
+    return DEFAULT_CLOUD
+end
+function KindleDash:saveCloud(url)
+    local ok, s = pcall(function() return LuaSettings:open(self:settingsPath()) end)
+    if ok and s then
+        s:saveSetting("cloud", url or "")
+        s:flush()
+    end
+    self.cloud = url or ""
+end
+
 -- ---------- 拉取屏幕 ----------
-function KindleDash:fetchScreen()
-    local url = "http://" .. self.host .. "/api/screen"
-    local ok, body, code = pcall(function() return http.request(url) end)
+-- 取图优先级：局域网 PC > 云端 Pages > 本地缓存（缓存由调用方处理）
+function KindleDash:endpoints()
+    local list = {}
+    if self.host and self.host ~= "" then
+        table.insert(list, { url = "http://" .. self.host .. "/api/screen", name = "本机" })
+    end
+    if self.cloud and self.cloud ~= "" then
+        table.insert(list, { url = self.cloud, name = "云端" })
+    end
+    return list
+end
+
+-- 单个 URL 的取图。HTTPS 由 KOReader 定制版 socket.http 自动分派到 ssl.https，
+-- 这里只额外指定 CA 与校验级别；绝不能传 create（会破坏 scheme 自动分派）。
+function KindleDash:tryFetch(url)
+    local https = url:sub(1, 8) == "https://"
+    local ok, body, code = pcall(function()
+        if https and self:fileExists(CA_BUNDLE) then
+            return http.request{
+                url = url,
+                method = "GET",
+                cafile = CA_BUNDLE,
+                verify = "peer",
+                protocol = "tlsv1_2",
+            }
+        end
+        return http.request(url)
+    end)
     if not ok then
-        return nil, "request error: " .. tostring(body)
+        logger.warn("ShawnKanban fetch error", url, tostring(body))
+        return nil
     end
     if not body or body == "" or code ~= 200 then
-        return nil, "fetch failed (" .. tostring(code) .. ")"
+        logger.warn("ShawnKanban fetch http", url, tostring(code))
+        return nil
     end
-    -- /api/screen 出错时会返回 text/plain，必须确认拿到的是真 PNG，否则 ImageWidget 会炸
+    -- 服务端出错会返回 text/plain，必须确认拿到的是真 PNG，否则 ImageWidget 会炸
     if body:sub(1, 4) ~= "\137PNG" then
-        return nil, "not a PNG (" .. tostring(body):sub(1, 60) .. ")"
+        logger.warn("ShawnKanban not a PNG", url, tostring(body):sub(1, 60))
+        return nil
     end
-    return body, nil
+    return body
+end
+
+function KindleDash:fetchScreen()
+    local eps = self:endpoints()
+    if #eps == 0 then
+        return nil, "未配置任何图源"
+    end
+    local tried = {}
+    for _, ep in ipairs(eps) do
+        local data = self:tryFetch(ep.url)
+        if data then
+            return data, nil, ep.name
+        end
+        table.insert(tried, ep.name)
+    end
+    return nil, table.concat(tried, "/") .. " 均不可用"
 end
 
 -- 保存 PNG 到文件（缓存目录持久化，Kindle 重启后仍在）
@@ -220,7 +292,7 @@ function KindleDash:safeRefresh()
 end
 
 function KindleDash:refreshDashboard(silent)
-    local data, err = self:fetchScreen()
+    local data, err, source = self:fetchScreen()
     local cacheImg = self:cacheImg()
     if not data then
         -- 拉取失败：用持久缓存（Kindle 重启后仍在）
@@ -247,7 +319,12 @@ function KindleDash:refreshDashboard(silent)
     end
     self._offline = false
     self._last_ok = true
+    self._source = source
     self:showDashboard(cacheImg, false)
+    if not silent and source == "云端" then
+        -- 电脑没开时走的正是这条路，明确告诉用户数据来自云端
+        UIManager:show(InfoMessage:new{ text = "来自云端（电脑未连上）", timeout = 2 })
+    end
 end
 
 -- ---------- 自动刷新（对齐整点/半点） ----------
@@ -304,6 +381,30 @@ function KindleDash:setServerAddress()
     UIManager:show(dialog)
 end
 
+function KindleDash:setCloudUrl()
+    local dialog
+    dialog = InputDialog:new{
+        title = "云端图地址 (完整 URL)",
+        description = "电脑关机时从这儿取图。留空则只用局域网。",
+        input = self.cloud or "",
+        input_hint = "https://用户名.github.io/shawn-kanban/screen.png",
+        buttons = {
+            {
+                { text = "取消", callback = function() UIManager:close(dialog) end },
+                { text = "保存", callback = function()
+                    local v = dialog:getInputValue() or ""
+                    self:saveCloud(v)
+                    UIManager:close(dialog)
+                    UIManager:show(InfoMessage:new{
+                        text = v == "" and "已清空云端地址" or "已保存: " .. v, timeout = 3
+                    })
+                end }
+            }
+        }
+    }
+    UIManager:show(dialog)
+end
+
 function KindleDash:addToMainMenu(menu_items)
     menu_items.kindledash = {
         text = "Shawn Kanban",
@@ -311,12 +412,16 @@ function KindleDash:addToMainMenu(menu_items)
         callback = function() self:safeRefresh() end,
         submenus = {
             { text = "刷新看板",     callback = function() self:safeRefresh() end },
-            { text = "设置服务器地址", callback = function() self:setServerAddress() end },
+            { text = "设置局域网服务器", callback = function() self:setServerAddress() end },
+            { text = "设置云端图地址", callback = function() self:setCloudUrl() end },
             { text = "切换自动刷新 (整点/半点)", callback = function() self:toggleAutoRefresh() end },
             { text = "关于", callback = function()
                 UIManager:show(InfoMessage:new{
-                    text = "Shawn Kanban\nPC 端 /api/screen 整屏图 · ~24KB 1-bit PNG\n满屏 ImageWidget 显示\n唤醒即刷 + 30 分自动\n离线用 settings 目录持久缓存\n顶部下滑/顶部点击返回",
-                    timeout = 5
+                    text = "Shawn Kanban\n取图顺序：局域网 PC > 云端 Pages > 本地缓存\n"
+                       .. "云端每 15 分钟由 GitHub Actions 渲染\n"
+                       .. "AI 额度需要本机上报器在线才会更新\n"
+                       .. "唤醒即刷 + 30 分自动\n顶部下滑/顶部点击返回",
+                    timeout = 6
                 })
             end }
         }
