@@ -32,3 +32,10 @@ tools/tmp/
 
 # 本机上报的额度快照（由上报器通过 GitHub API 推送，不进 git）
 data/quotas.json
+
+# 上报器密钥与日志
+tools/report_secrets.bat
+tools/report_quota.log
+
+# 下载的 CJK 字体（CI 用 apt 或按需下载，不进仓库）
+fonts/

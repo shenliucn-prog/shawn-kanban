@@ -17,21 +17,23 @@ BLACK, GRAY, LIGHT_GRAY, WHITE = 0, 128, 200, 255
 
 # 字体：本机用微软雅黑，Linux/CI 用开源 Noto Sans CJK。
 # 优先级：环境变量 > 候选路径 > 默认值。找不到时 f() 会退回 load_default（不显示中文）。
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.dirname(_HERE)
 LINUX_REG = [
     '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
     '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
     '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
     '/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf',
-    './fonts/NotoSansSC-Regular.otf',
-    './fonts/NotoSansCJKsc-Regular.otf',
+    os.path.join(_ROOT, 'fonts', 'NotoSansSC-Regular.otf'),
+    os.path.join(_ROOT, 'fonts', 'NotoSansCJKsc-Regular.otf'),
 ]
 LINUX_BOLD = [
     '/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc',
     '/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc',
     '/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc',
     '/usr/share/fonts/opentype/noto/NotoSansCJKsc-Bold.otf',
-    './fonts/NotoSansSC-Bold.otf',
-    './fonts/NotoSansCJKsc-Bold.otf',
+    os.path.join(_ROOT, 'fonts', 'NotoSansSC-Bold.otf'),
+    os.path.join(_ROOT, 'fonts', 'NotoSansCJKsc-Bold.otf'),
 ]
 WIN_REG = r"C:/Windows/Fonts/msyh.ttc"
 WIN_BOLD = r"C:/Windows/Fonts/msyhbd.ttc"
@@ -70,7 +72,12 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE, '..', 'data')
 
 # ---------- 字体缓存 ----------
+# 注意：字体加载失败绝不能静默回退 —— load_default() 渲染不出中文，
+# 整屏会变成空白/方块，而在 CI 上极难察觉。这里记录状态并允许 --check-fonts 直接报错。
 _fc = {}
+_font_errors = []
+
+
 def f(size, bold=False):
     k = (size, bold)
     if k in _fc:
@@ -78,9 +85,44 @@ def f(size, bold=False):
     p = FONT_BOLD if bold else FONT_REG
     try:
         _fc[k] = ImageFont.truetype(p, size)
-    except Exception:
+    except Exception as e:
+        msg = '字体加载失败 %s: %s -> 退回 load_default（中文会渲染不出来）' % (p, e)
+        if msg not in _font_errors:
+            _font_errors.append(msg)
+        print('[render] ERROR ' + msg, file=sys.stderr, flush=True)
         _fc[k] = ImageFont.load_default()
     return _fc[k]
+
+
+def check_fonts():
+    """真正加载一次并测量中日韩字符，确认能渲染中文。返回 (ok, 详情列表)。"""
+    info = []
+    ok = True
+    for tag, path in (('regular', FONT_REG), ('bold', FONT_BOLD)):
+        if not os.path.exists(path):
+            info.append('%s: 文件不存在 %s' % (tag, path))
+            ok = False
+            continue
+        try:
+            ft = ImageFont.truetype(path, 34)
+        except Exception as e:
+            info.append('%s: 加载失败 %s (%s)' % (tag, path, e))
+            ok = False
+            continue
+        # 用中文实测：宽度异常小说明字形缺失（豆腐/空白）
+        img = Image.new('L', (1200, 80), 255)
+        d = ImageDraw.Draw(img)
+        # fill 必须显式给 0：默认是白色，画在白底上会量到 0 墨迹
+        d.text((0, 10), '中文测试道奇教士', font=ft, fill=0)
+        bb = d.textbbox((0, 10), '中文测试道奇教士', font=ft)
+        wpx = bb[2] - bb[0]
+        ink = sum(1 for y in range(80) for x in range(1200) if img.load()[x, y] < 128)
+        good = wpx >= 200 and ink > 200
+        info.append('%s: %s  中文8字宽=%dpx 墨迹=%d  %s'
+                    % (tag, os.path.basename(path), wpx, ink, 'OK' if good else '字形缺失!'))
+        if not good:
+            ok = False
+    return ok, info
 
 # ---------- 工具 ----------
 def tw(draw, s, font):
@@ -407,12 +449,24 @@ def main():
     ap.add_argument('--out')
     ap.add_argument('--data')
     ap.add_argument('--url', default='http://127.0.0.1:8787/api/dashboard')
+    ap.add_argument('--check-fonts', action='store_true',
+                    help='只校验字体能否渲染中文，失败则以非零码退出（CI 用）')
     a = ap.parse_args()
     # CI 上字体找错会渲染成方块，打出来便于排查
     print('[render] font_reg=%s%s' % (FONT_REG, '' if os.path.exists(FONT_REG) else '  <-- 缺失!'),
           file=sys.stderr, flush=True)
     print('[render] font_bold=%s%s' % (FONT_BOLD, '' if os.path.exists(FONT_BOLD) else '  <-- 缺失!'),
           file=sys.stderr, flush=True)
+
+    if a.check_fonts:
+        ok, info = check_fonts()
+        for line in info:
+            print('[font] ' + line, file=sys.stderr, flush=True)
+        if not ok:
+            print('[font] FAILED', file=sys.stderr, flush=True)
+            sys.exit(2)
+        print('[font] OK', file=sys.stderr, flush=True)
+        return
     d = json.load(open(a.data, encoding='utf-8')) if a.data else fetch_dashboard(a.url)
     render(d, a.out)
 

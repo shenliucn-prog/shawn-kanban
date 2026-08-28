@@ -1,0 +1,119 @@
+name: Render Kindle Screen
+
+# 每 15 分钟渲染一次整屏 PNG 并发布到 gh-pages。
+# Kindle 直接取 gh-pages 上的静态图，电脑不开也能刷新。
+# AI 额度来自本机上报器推上来的 data/quotas.json（超过 15 分钟没更新会标"电脑离线"）。
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+  push:
+    paths:
+      - 'data/quotas.json'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: render-screen
+  cancel-in-progress: true
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Node deps
+        run: npm ci
+
+      - name: Install Pillow
+        run: python -m pip install --upgrade pip && python -m pip install Pillow
+
+      - name: Install CJK font
+        run: |
+          set -e
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fonts-noto-cjk
+          # 兜底：发行版包缺失时手动下载 Noto Sans SC
+          if [ ! -f /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc ] \
+             && [ ! -f /usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc ]; then
+            echo "apt 包未落到预期路径，手动下载字体"
+            mkdir -p fonts
+            # jsDelivr 比 raw.githubusercontent 拉大文件稳
+            BASE=https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/SubsetOTF/SC
+            curl -fsSL --retry 3 "$BASE/NotoSansSC-Regular.otf" -o fonts/NotoSansSC-Regular.otf
+            curl -fsSL --retry 3 "$BASE/NotoSansSC-Bold.otf"    -o fonts/NotoSansSC-Bold.otf
+          fi
+          ls -la /usr/share/fonts/opentype/noto/ 2>/dev/null | head -20 || true
+          ls -la fonts 2>/dev/null || true
+
+      - name: Verify CJK font really renders
+        # 字体坏掉时中文会变成空白/方块，在 CI 日志里几乎看不出来，必须显式校验
+        run: python tools/render_screen.py --check-fonts
+
+      - name: Dump dashboard JSON
+        env:
+          SHAWN_MODE: cloud
+          SHAWN_QUOTAS_FILE: ${{ github.workspace }}/data/quotas.json
+        run: node tools/dump_dashboard.js > dashboard.json
+
+      - name: Sanity check payload
+        run: |
+          python - <<'PY'
+          import json, sys
+          d = json.load(open('dashboard.json', encoding='utf-8'))
+          print('mode      =', d.get('mode'))
+          print('pcOnline  =', d.get('pcOnline'))
+          print('news      =', len((d.get('news') or {}).get('items', [])))
+          print('mlb       =', len((d.get('mlb') or {}).get('items', [])))
+          print('stocks    =', len((d.get('stocks') or {}).get('items', [])))
+          if not (d.get('news') or {}).get('items'):
+              print('::warning::news empty')
+          if not d.get('ok'):
+              print('payload not ok', file=sys.stderr); sys.exit(1)
+          PY
+
+      - name: Render PNG
+        run: python tools/render_screen.py --data dashboard.json --out screen.png
+
+      - name: Verify size
+        run: |
+          python - <<'PY'
+          from PIL import Image
+          im = Image.open('screen.png')
+          if im.size != (1072, 1448):
+              raise SystemExit('unexpected size %s' % (im.size,))
+          print('screen.png', im.size, im.mode)
+          PY
+          ls -la screen.png
+
+      - name: Publish to gh-pages
+        run: |
+          set -e
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          rm -rf _site && mkdir -p _site
+          cp screen.png _site/screen.png
+          cp dashboard.json _site/dashboard.json
+          cd _site
+          git init -q
+          git checkout -q -b gh-pages
+          git add -A
+          git commit -q -m "render $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push -q --force "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" HEAD:gh-pages
+          echo "published"
