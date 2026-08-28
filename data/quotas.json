@@ -1,0 +1,45 @@
+{
+  "ts": 1787943040989,
+  "host": "DESKTOP-P8BFJDJ",
+  "quotas": {
+    "workbuddy": {
+      "ok": true,
+      "model": "custom-local:deepseek-v4-pro",
+      "title": "排查存剧推送到 git 的问题",
+      "token": {
+        "used": 153173,
+        "size": 1000000,
+        "remaining": 846827,
+        "percent": 15.3
+      },
+      "used": 153173,
+      "cap": 1000000,
+      "remaining": 846827,
+      "percent": 15.3,
+      "unit": "tokens",
+      "lastActivityAt": 1787942572447,
+      "source": "session"
+    },
+    "claudecode": {
+      "ok": true,
+      "used7d": 591,
+      "cap": 1000,
+      "remaining": 409,
+      "percent": 59,
+      "unit": "messages",
+      "sessions7d": 5,
+      "messages7d": 591,
+      "lastModel": "hy4-preview",
+      "source": "local .workbuddy/projects (activity)"
+    },
+    "codex": {
+      "ok": false,
+      "error": "not-installed",
+      "cap": 500,
+      "used7d": null,
+      "remaining": null,
+      "percent": 0,
+      "unit": "messages"
+    }
+  }
+}
