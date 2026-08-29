@@ -112,7 +112,13 @@ async function getSparks(list) {
   return results;
 }
 
+// 外层再包一层 cached：里层只缓存原始批次文本，最终返回值不经过 cached 就不会有
+// fetchedAt，也享受不到失败降级。包一层即可跟其他 provider 行为一致。
 export async function getStocks() {
+  return cached('stocks', 60 * 1000, () => buildStocks());
+}
+
+async function buildStocks() {
   const list = getConfig().stocks || [];
   if (!list.length) return { ok: false, error: 'no stocks configured', items: [] };
 

@@ -223,13 +223,39 @@ def draw_header(draw, d, y):
         draw.text((SCREEN_W - PAD - tw(draw, city, fs), y + F_TIME + 6), city, fill=GRAY, font=fs)
     return y + 112
 
-def draw_title(draw, y, text):
+def stamp_label(src):
+    """把模块数据里的 fetchedAt 变成右上角的时间标注。
+
+    stale（本次拉取失败、用的是上次成功数据）时标成「缓存 HH:MM」。
+    拿不到时间就返回 None，标题栏保持原样。
+    """
+    if not isinstance(src, dict):
+        return None
+    ts = src.get('fetchedAt')
+    if not ts:
+        return None
+    try:
+        t = datetime.fromtimestamp(float(ts) / 1000.0)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+    hhmm = t.strftime('%H:%M')
+    return ('缓存 %s' % hhmm) if src.get('stale') else hhmm
+
+
+def draw_title(draw, y, text, src=None):
+    """模块标题。传 src（该模块的数据）时，右上角显示数据的获取时间。"""
     draw.text((PAD, y), text, fill=BLACK, font=f(F_TITLE, bold=True))
+    label = stamp_label(src)
+    if label:
+        fs = f(F_SMALL)
+        # 右对齐到内容区右边界；小字按标题基线附近排，视觉上跟标题齐平
+        draw.text((SCREEN_W - PAD - tw(draw, label, fs), y + (F_TITLE - F_SMALL)),
+                  label, fill=GRAY, font=fs)
     return y + F_TITLE + 8
 
 def draw_news(draw, d, y):
     """今日新闻 · AI：中文一句话，按自然标点断句，绝不超页宽"""
-    y = draw_title(draw, y, '今日新闻 · AI')
+    y = draw_title(draw, y, '今日新闻 · AI', d.get('news'))
     items = (d.get('news') or {}).get('items', [])
     ff = f(F_BODY)
     fs = f(F_SMALL)
@@ -247,7 +273,7 @@ def draw_ai(draw, d, y):
     """AI 额度：WorkBuddy / Claude Code / Codex 三行统一度量衡"""
     # cloud 模式下若本机久未上报，标题直接点明"电脑离线"，不拿旧值假装新鲜
     title = 'AI 额度' if d.get('pcOnline', True) else 'AI 额度 · 电脑离线'
-    y = draw_title(draw, y, title)
+    y = draw_title(draw, y, title, d.get('quotas'))
     q = d.get('quotas', {})
     rows = [
         ('WorkBuddy', q.get('workbuddy', {})),
@@ -289,7 +315,7 @@ def draw_ai(draw, d, y):
 
 def draw_weather(draw, d, y):
     w = d.get('weather', {})
-    y = draw_title(draw, y, '天气')
+    y = draw_title(draw, y, '天气', w)
     if w.get('ok'):
         t1 = '%s°' % fnum(w.get('temp'))
         ft = f(F_BIG, bold=True)
@@ -305,7 +331,7 @@ def draw_weather(draw, d, y):
 
 def draw_market(draw, d, y):
     st = (d.get('stocks') or {}).get('items', [])
-    y = draw_title(draw, y, '市场')
+    y = draw_title(draw, y, '市场', d.get('stocks'))
     ff = f(F_BODY)
     colw = CONTENT_W // 2
     rows = math.ceil(len(st) / 2)
@@ -347,7 +373,7 @@ def draw_clocks(draw, d, y):
 
 def draw_mlb(draw, d, y):
     """MLB · 道奇 / 教士：上一场比分 + 下一场时间（均为北京时间）"""
-    y = draw_title(draw, y, 'MLB · 道奇 / 教士')
+    y = draw_title(draw, y, 'MLB · 道奇 / 教士', d.get('mlb'))
     items = (d.get('mlb') or {}).get('items', [])
     ff = f(F_BODY)
     fs = f(F_SMALL)

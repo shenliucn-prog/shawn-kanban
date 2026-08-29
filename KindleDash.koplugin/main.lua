@@ -23,6 +23,10 @@ local LuaSettings = require("luasettings")
 local DataStorage = require("datastorage")
 local lfs = require("libs/libkoreader-lfs")
 local logger = require("logger")
+-- 通知 autosuspend 插件别挂起设备（官方机制，autoturn/keepalive 同款）。
+-- 用 pcall 防御：模块万一缺失也不能让整个插件加载失败（重演 lfs 事故的教训）。
+local ok_ps, PluginShare = pcall(require, "pluginshare")
+if not ok_ps then PluginShare = nil end
 
 -- 网络请求超时：电脑关机时不要让用户等太久，8 秒无响应就切换离线缓存
 http.TIMEOUT = 8
@@ -132,6 +136,27 @@ function KindleDash:saveCloud(url)
     self.cloud = url or ""
 end
 
+-- ---------- 阻止深度挂起 ----------
+-- Kindle 上 canStandby=false、canSuspend=true：一旦进 suspend，UIManager 定时器
+-- 全部停止（整点自动刷新形同虚设），且历史上出现过电源键唤不醒、必须插电才恢复。
+-- 所以看板显示期间用官方 PluginShare.pause_auto_suspend 阻止挂起，退出时恢复原值。
+-- 严禁 preventStandby（会锁死电源键，历史事故）。
+function KindleDash:holdAwake(on)
+    if not PluginShare then return end
+    if on then
+        if self._hold_awake then return end
+        self._saved_pause = PluginShare.pause_auto_suspend
+        PluginShare.pause_auto_suspend = true
+        self._hold_awake = true
+        logger.info("ShawnKanban holdAwake ON")
+    else
+        if not self._hold_awake then return end
+        PluginShare.pause_auto_suspend = self._saved_pause
+        self._hold_awake = false
+        logger.info("ShawnKanban holdAwake OFF")
+    end
+end
+
 -- ---------- 拉取屏幕 ----------
 -- 取图优先级：局域网 PC > 云端 Pages > 本地缓存（缓存由调用方处理）
 function KindleDash:endpoints()
@@ -232,6 +257,7 @@ function KindleDash:showDashboard(img_path, offline)
 end
 
 function KindleDash:buildScreen(img_path, w, h)
+    local dash = self    -- container 回调里的 self 是 container，这里留个插件实例的引用
     -- ImageWidget 满屏显示
     -- file_do_cache=false: 切换图时强制重新解码；close 时 ImageWidget:free() 释放 BlitBuffer
     local img = ImageWidget:new{
@@ -265,10 +291,14 @@ function KindleDash:buildScreen(img_path, w, h)
         return true
     end
     function container:onClose()
+        dash.dash_widget = nil      -- 先标记已关闭，否则后台刷新会误判成"看板正显示"
+        dash:holdAwake(false)
         UIManager:close(self)
         return true
     end
     function container:onBack()
+        dash.dash_widget = nil
+        dash:holdAwake(false)
         UIManager:close(self)
         return true
     end
@@ -278,6 +308,8 @@ function KindleDash:buildScreen(img_path, w, h)
         return true
     end
     self.dash_widget = container
+    -- 看板显示期间不挂起，整点/半点的定时刷新才可能真正触发
+    dash:holdAwake(true)
     UIManager:show(container)
 end
 
@@ -294,32 +326,42 @@ end
 function KindleDash:refreshDashboard(silent)
     local data, err, source = self:fetchScreen()
     local cacheImg = self:cacheImg()
+    local showing = (self.dash_widget ~= nil)   -- 看板此刻是否正显示在屏幕上
+
     if not data then
-        -- 拉取失败：用持久缓存（Kindle 重启后仍在）
+        -- 拉取失败：看板正显示时用持久缓存顶上（Kindle 重启后仍在）
         if self:fileExists(cacheImg) then
             self._offline = true
             self._last_ok = true
-            self:showDashboard(cacheImg, true)
-            if not silent then
-                local ts = self:readTs()
-                local msg = ts and ("离线 · 最后 " .. ts) or "离线 · 显示上次缓存"
-                UIManager:show(InfoMessage:new{ text = msg, timeout = 2 })
+            if showing then
+                self:showDashboard(cacheImg, true)
+                if not silent then
+                    local ts = self:readTs()
+                    local msg = ts and ("离线 · 最后 " .. ts) or "离线 · 显示上次缓存"
+                    UIManager:show(InfoMessage:new{ text = msg, timeout = 2 })
+                end
             end
-        else
-            if not silent then
-                UIManager:show(InfoMessage:new{ text = "刷新失败: " .. tostring(err), timeout = 3 })
-            end
+        elseif not silent then
+            UIManager:show(InfoMessage:new{ text = "刷新失败: " .. tostring(err), timeout = 3 })
         end
         logger.warn("ShawnKanban refresh failed:", err)
         return
     end
-    -- 成功：写持久缓存 + 时间戳 + 显示
+
+    -- 成功：写持久缓存 + 时间戳
     if self:writePng(cacheImg, data) then
         self:writeTs(os.date("%H:%M"))
     end
     self._offline = false
     self._last_ok = true
     self._source = source
+
+    -- 看板没在显示时只默默更新缓存，别把看板弹回来（下次打开即是最新）
+    if not showing then
+        logger.info("ShawnKanban bg refresh ok source=", source, " 看板未显示, 仅更新缓存")
+        return
+    end
+
     self:showDashboard(cacheImg, false)
     if not silent and source == "云端" then
         -- 电脑没开时走的正是这条路，明确告诉用户数据来自云端
@@ -341,7 +383,10 @@ function KindleDash:armAutoRefresh()
         if not self.auto_on then return end
         -- 定时器里出错也必须续上下一次，且不能崩
         pcall(function() self:refreshDashboard(true) end)
-        self._auto_timer = UIManager:scheduleIn(REFRESH_SEC, tick)
+        -- 每次都按整点/半点重新对齐：用固定间隔会因刷新耗时而累积漂移
+        local delay = secondsToNextSlot()
+        if delay < 30 then delay = delay + REFRESH_SEC end
+        self._auto_timer = UIManager:scheduleIn(delay, tick)
     end
     local first = secondsToNextSlot()
     if first < 30 then first = first + REFRESH_SEC end

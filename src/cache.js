@@ -1,10 +1,24 @@
 // Tiny TTL cache + resilient JSON fetch helper (no external deps).
 
-const store = new Map(); // key -> { value, expires }
+const store = new Map(); // key -> { value, expires, fetchedAt }
+// 上一次"成功"的数据。失败时用它降级，让看板能显示"上一次缓存"而不是冷冰冰的"不可用"。
+const lastOk = new Map(); // key -> { value, at }
+
+// 各 provider 统一用 ok:false 标识失败；没带 ok 字段的对象视为成功。
+const isOk = (v) => !!(v && v.ok !== false);
+
+// 给返回体打上数据获取时间，渲染端据此显示刷新时间。
+function stamp(value, at) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) value.fetchedAt = at;
+  return value;
+}
 
 /**
  * Run `producer()` and cache its result for `ttlMs`.
  * Concurrent calls for the same key share one in-flight promise.
+ *
+ * 失败语义（stale-while-error）：本次拉取失败时，若历史上成功过，
+ * 就返回那次成功的数据并打上 stale:true，fetchedAt 保持为上次成功的时间。
  */
 const inflight = new Map();
 export async function cached(key, ttlMs, producer) {
@@ -17,8 +31,23 @@ export async function cached(key, ttlMs, producer) {
   const p = (async () => {
     try {
       const value = await producer();
-      store.set(key, { value, expires: Date.now() + ttlMs });
-      return value;
+      const at = Date.now();
+
+      if (isOk(value)) {
+        lastOk.set(key, { value, at });
+        store.set(key, { value, expires: at + ttlMs, fetchedAt: at });
+        return stamp(value, at);
+      }
+
+      // 拉取失败：有上次成功数据就降级，否则原样返回失败体
+      const prev = lastOk.get(key);
+      if (prev) {
+        const stale = stamp({ ...prev.value, stale: true }, prev.at);
+        store.set(key, { value: stale, expires: at + ttlMs, fetchedAt: prev.at });
+        return stale;
+      }
+      store.set(key, { value, expires: at + ttlMs, fetchedAt: at });
+      return stamp(value, at);
     } finally {
       inflight.delete(key);
     }

@@ -51,14 +51,19 @@ export async function buildDashboard(db) {
   ]);
 
   const reported = cloud ? getReported() : null;
+  const now = Date.now();
+
+  // 额度的"刷新时间"：local 模式是从本机 DB 现读的（=此刻），
+  // cloud 模式是本机上报器最后一次推送上来的时间。
+  const quotas = cloud ? quotasCloud() : quotasLocal(db);
 
   return {
     ok: true,
-    serverTime: Date.now(),
+    serverTime: now,
     mode: cloud ? 'cloud' : 'local',
     // 电脑是否还"活着"：local 模式永远在线；cloud 模式看上报是否新鲜
     pcOnline: cloud ? !!(reported && reported.ok && !reported.stale) : true,
-    quotas: cloud ? quotasCloud() : quotasLocal(db),
+    quotas: { ...quotas, fetchedAt: cloud ? (reported && reported.ts) || null : now },
     weather,
     stocks,
     clocks: getClocks(),
