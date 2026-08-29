@@ -304,7 +304,7 @@ function KindleDash:buildScreen(img_path, w, h)
     end
     function container:onResume()
         -- 唤醒即刷
-        pcall(function() KindleDash.refreshDashboard(KindleDash, true) end)
+        pcall(function() KindleDash.refreshDashboard(KindleDash, true, false) end)
         return true
     end
     self.dash_widget = container
@@ -316,24 +316,27 @@ end
 -- ---------- 刷新（含离线缓存兜底） ----------
 -- 菜单入口：任何异常都收敛成提示，避免把 KOReader 打回桌面
 function KindleDash:safeRefresh()
-    local ok, err = pcall(function() self:refreshDashboard(false) end)
+    local ok, err = pcall(function() self:refreshDashboard(false, true) end)   -- 用户主动：必须显示看板
     if not ok then
         logger.err("ShawnKanban refresh crashed: ", tostring(err))
         UIManager:show(InfoMessage:new{ text = "看板失败:\n" .. tostring(err), timeout = 8 })
     end
 end
 
-function KindleDash:refreshDashboard(silent)
+-- manual=true 表示用户主动打开（点菜单）；false 表示定时/唤醒的后台刷新。
+-- 后台刷新不应把已关闭的看板弹回来，但用户主动点就必须显示——
+-- 首次打开时 dash_widget 本来就是 nil，不能拿它判断"用户想不想看"。
+function KindleDash:refreshDashboard(silent, manual)
     local data, err, source = self:fetchScreen()
     local cacheImg = self:cacheImg()
     local showing = (self.dash_widget ~= nil)   -- 看板此刻是否正显示在屏幕上
 
     if not data then
-        -- 拉取失败：看板正显示时用持久缓存顶上（Kindle 重启后仍在）
+        -- 拉取失败：看板正显示时（或用户主动打开时）用持久缓存顶上
         if self:fileExists(cacheImg) then
             self._offline = true
             self._last_ok = true
-            if showing then
+            if showing or manual then
                 self:showDashboard(cacheImg, true)
                 if not silent then
                     local ts = self:readTs()
@@ -356,8 +359,8 @@ function KindleDash:refreshDashboard(silent)
     self._last_ok = true
     self._source = source
 
-    -- 看板没在显示时只默默更新缓存，别把看板弹回来（下次打开即是最新）
-    if not showing then
+    -- 后台刷新且看板没在显示：只默默更新缓存，别把看板弹回来（下次打开即是最新）
+    if not showing and not manual then
         logger.info("ShawnKanban bg refresh ok source=", source, " 看板未显示, 仅更新缓存")
         return
     end
@@ -382,7 +385,7 @@ function KindleDash:armAutoRefresh()
     local function tick()
         if not self.auto_on then return end
         -- 定时器里出错也必须续上下一次，且不能崩
-        pcall(function() self:refreshDashboard(true) end)
+        pcall(function() self:refreshDashboard(true, false) end)   -- 后台定时：不主动弹窗
         -- 每次都按整点/半点重新对齐：用固定间隔会因刷新耗时而累积漂移
         local delay = secondsToNextSlot()
         if delay < 30 then delay = delay + REFRESH_SEC end
