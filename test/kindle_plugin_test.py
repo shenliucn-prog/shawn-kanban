@@ -74,3 +74,37 @@ assert(PS.pause_auto_suspend==nil and UI.queue[d._auto_timer]==nil)
 assert(UI.queue[awake]==nil)
 print('PASS: HTTPS bytes, network failure, timer cancellation, idle reset, suspend, resume retry, cleanup')
 ''')
+
+lua.execute('''
+local saved = {}
+local settings = {}
+function settings:readSetting(key) return saved[key] end
+function settings:has(key) return saved[key] ~= nil end
+function settings:saveSetting(key, value) saved[key] = value end
+function settings:flush() end
+require('luasettings').open = function() return settings end
+G_reader_settings = {readSetting=function() return 'C' end}
+local d = Plugin:new{}
+d.settingsPath=function() return '/tmp/settings' end
+d.cacheDir=function() return '/tmp' end
+assert(d:loadLanguage() == 'en' and saved.language == 'en')
+d.language='en'
+assert(d:loadCloud():match('screen%-en.png$'))
+assert(d:tr('刷新看板') == 'Refresh dashboard')
+local menus={}; d:addToMainMenu(menus)
+assert(menus['0kindledash'].sub_item_table_func()[2].text == 'Refresh dashboard')
+d.host='example.test:8787'; d.cloud=d:loadCloud()
+assert(d:endpoints()[1].url:match('lang=en$'))
+local en_cache=d:cacheImg()
+d:setLanguage('zh')
+assert(saved.language=='zh' and d.cloud:match('/screen.png$'))
+assert(d:cacheImg() ~= en_cache)
+assert(menus['0kindledash'].sub_item_table_func()[2].text == '刷新看板')
+d.cloud='https://example.test/custom.png'; d:setLanguage('en')
+assert(d.cloud=='https://example.test/custom.png')
+saved={host='old-device'}
+assert(d:loadLanguage()=='zh' and saved.language=='zh')
+saved={}; G_reader_settings.readSetting=function() return 'zh_CN' end
+assert(d:loadLanguage()=='zh')
+print('PASS: English first install, persisted locale, Chinese migration, dynamic menus, custom URLs, separate caches')
+''')

@@ -63,7 +63,15 @@ async function fetchRss(url, max) {
   }
 }
 
-export function getNews() {
+export function getNews(language = 'zh') {
+  if (language === 'en') {
+    return cached('news-en', 10 * 60 * 1000, async () => {
+      const r = await fetchJson('https://hn.algolia.com/api/v1/search_by_date?query=AI&tags=story&hitsPerPage=12');
+      const items = (r.data?.hits || []).filter(h => h.title).slice(0, 6)
+        .map(h => ({ title: h.title, source: 'HN', url: h.url }));
+      return { ok: r.ok && items.length > 0, items, source: 'HN', error: r.error };
+    });
+  }
   // 缓存 10 分钟：Kindle 30 分钟刷新时必然拿到新数据，同时避免频繁请求源站。
   return cached('news', 10 * 60 * 1000, async () => {
     const items = [];

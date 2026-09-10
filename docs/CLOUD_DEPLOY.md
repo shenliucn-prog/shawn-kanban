@@ -1,57 +1,59 @@
-# 免费云端看板：外部定时触发 + Actions + Pages
+# Free cloud dashboard: external scheduler + Actions + Pages
 
-**中文（默认）** | [English](CLOUD_DEPLOY.en.md) · [返回 README](../README.md)
+[简体中文](CLOUD_DEPLOY.zh-CN.md) | **English (default)** · [README](../README.md)
 
-## 结构
+## Structure
 
-- `main`：源码、布局、配置模板、测试。
-- `runtime-data`：独立的额度输入分支，根目录 `quotas.json`；不触发源码 CI。
-- Pages 部署产物：`screen.png`、`status.json`、状态网页，不写进任何源码提交。
-- 原始 Dashboard JSON 仅在运行任务中使用，不公开发布。
+- `main`: source, layout, configuration templates, and tests.
+- `runtime-data`: separate quota input branch, with `quotas.json` at its root; it does not trigger source CI.
+- Pages artifacts: `screen.png`, `status.json`, and the status page, without committing generated output to source.
+- Raw dashboard JSON is used during generation and is not published.
 
-已有 `gh-pages` 留作迁移回退；新流程不再向它提交。
+The old `gh-pages` branch remains for migration rollback; the new pipeline does not commit to it. Separate branches are still part of the same repository, with the same visibility.
 
-## 外部触发配置
+## External trigger
 
-在 cron-job.org 创建任务：
+Create a cron-job.org job:
 
-- 名称：Shawn Kanban half-hour render
-- URL：`https://api.github.com/repos/shenliucn-prog/shawn-kanban/actions/workflows/render.yml/dispatches`
-- 方法：POST
-- 请求正文：`{"ref":"main"}`
-- 每小时第 25、55 分钟运行。当前任务时区为 America/Los_Angeles，这两个分钟位置与 UTC 一致。留几分钟给生成和发布，让 Kindle 在整点/半点取图。
-- 请求头 `Accept: application/vnd.github+json`
-- 请求头 `Content-Type: application/json`
-- 请求头 `Authorization: Bearer <专用令牌>`
+- Name: Shawn Kanban half-hour render
+- URL: `https://api.github.com/repos/shenliucn-prog/shawn-kanban/actions/workflows/render.yml/dispatches`
+- Method: POST
+- Body: `{"ref":"main"}`
+- Schedule: minute 25 and 55 of every hour, leaving time for generation before Kindle refresh at :00 and :30. The configured job uses America/Los_Angeles; these minute positions also match UTC.
+- Headers: `Accept: application/vnd.github+json`, `Content-Type: application/json`, and `Authorization: Bearer <dedicated-token>`.
 
-专用 GitHub fine-grained token 应只选 `shawn-kanban` 仓库，授予 Actions: write 和必需的 Metadata 读取权限，用于触发工作流。设置有效期并在到期前更新。不要把现有全账户令牌交给外部定时平台。凭证只填入定时器的认证请求头，不放 URL、不写进 Git。
+Use a fine-grained GitHub token restricted to `shawn-kanban`, with Actions write permission and required Metadata read access. Set an expiry and renew it before that date. Store the credential only in the scheduler's authentication header, never in the URL or Git. Do not give the scheduler an existing account-wide token.
 
-API 成功接受触发与图片发布成功是两件事。定时器请求很快返回，不等待生成；生成和部署结果在 GitHub Actions 检查。
+An accepted dispatch is not proof of a successful image deployment. The scheduler returns quickly; inspect Actions for generation and deployment results.
 
-GitHub 自带第 17、47 分钟定时仅为备份；`cancel-in-progress: false` 避免新触发中断正在生成的任务。外部定时也不能保证 GitHub 运行器绝对准点。
+GitHub's :17 and :47 schedule is a backup. `cancel-in-progress: false` prevents new triggers from interrupting an active generation. External scheduling cannot guarantee immediate runner availability.
 
 ## Pages
 
-Settings → Pages → Source 设为 GitHub Actions。工作流使用 upload-pages-artifact / deploy-pages；图源地址不变：
+In Settings → Pages, select GitHub Actions as the source. The workflow uses upload-pages-artifact and deploy-pages.
 
-`https://shenliucn-prog.github.io/shawn-kanban/screen.png`
+- Image: `https://shenliucn-prog.github.io/shawn-kanban/screen.png`
+- Status page: `https://shenliucn-prog.github.io/shawn-kanban/`
+- Machine status: `https://shenliucn-prog.github.io/shawn-kanban/status.json`
 
-状态页：`https://shenliucn-prog.github.io/shawn-kanban/`
+Each run reads the previous image and checksum. If all public providers fail, fonts are unavailable, or rendering fails, it retains the last good image and publishes failure status where possible. An earlier failure, such as dependency installation, produces no deployment and leaves existing Pages content intact. The status page computes age from generation time and marks images older than 45 minutes as stale.
 
-机器状态：`https://shenliucn-prog.github.io/shawn-kanban/status.json`
+`status.json` retains the latest 256 generation results, timestamps, run IDs, and trigger types. Exact dispatch, queue, and deployment times come from GitHub run/job metadata. Do not treat dispatch acceptance as deployment completion.
 
-每次运行先读取上一张图片和校验和。公开数据全部失败、字体不可用或渲染失败时保留上一张好图，并发布失败状态。若安装依赖等更早步骤失败，则不产生新部署，已有 Pages 保持不动。状态网页按真实生成时间计算年龄，超过 45 分钟显示过期。
+## English and Chinese output
 
-`status.json` 保留最近 256 次生成结果、生成时间、任务 ID、触发类型。精确触发/排队/部署时间另由 GitHub run / job API 记录，不能把 API 接受触发当作发布完成。
+Each run collects data once and renders both languages. `screen.png` and the root preview remain Chinese for existing devices. `screen-en.png` is the English image, with preview and independent status history under `en/`. Failures retain each locale's previous good image where available; an initial failure without a previous image prevents deployment.
 
-## 本机额度上报迁移
+The repository's default documentation is English. Runtime language is selected separately in the plugin's **Language / 语言** menu. English news comes from HN, while Chinese news sources remain unchanged. Custom display labels may need English values; they are not automatically translated.
 
-更新上报器，并将现有私有配置中的 `GITHUB_BRANCH=main` 改为 `GITHUB_BRANCH=runtime-data`。默认远端路径改为 `quotas.json`。
+## Local reporter migration
 
-本地文件放在 `SHAWN_DATA_DIR`，默认 `~/.local/share/shawn-kanban/`。成功上传记录与本地采集分开，失败下轮重试；默认五分钟心跳避免用量不变时误判离线。
+Update the reporter and change `GITHUB_BRANCH=main` to `GITHUB_BRANCH=runtime-data` in your private configuration. The default remote path is now `quotas.json`.
 
-AI 指标含义保持原样：Claude Code 栏实际统计 WorkBuddy 消息，Codex 栏统计文件活动，不能视为账户真实额度。不要把敏感任务文本加入运行输入；runtime-data 与现有仓库同样公开。
+Local files live under `SHAWN_DATA_DIR`, defaulting to `~/.local/share/shawn-kanban/`. Successful-upload state is separate from collection state; a failed upload remains eligible for retry. A five-minute heartbeat prevents unchanged usage from appearing offline.
 
-## 48 小时验收
+Metric meanings are unchanged: the cloud reporter's Claude Code field counts WorkBuddy messages, and its Codex field counts file activity. Neither represents authoritative account quota. Do not include sensitive task text in runtime input: `runtime-data` is public, like this repository.
 
-从外部定时器启用后开始计时：检查每次外部请求是否被接受、Actions 是否执行、Pages 是否发布，以及图片生成时间是否超过 45 分钟。源码中的备份 cron 不算外部定时器验收完成。Kindle 休眠/唤醒仍需单独实机验证。
+## 48-hour validation
+
+Starting when the external job is enabled, check request acceptance, Actions execution, Pages deployment, and whether image age exceeds 45 minutes. Successful backup cron runs alone do not validate the external scheduler. Kindle sleep/resume requires separate device testing.

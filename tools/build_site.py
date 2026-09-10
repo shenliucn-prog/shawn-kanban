@@ -77,17 +77,18 @@ def main():
     work = output.parent / 'render-work'
     work.mkdir(exist_ok=True)
 
-    def generate():
+    def generate(language="zh"):
         subprocess.run([sys.executable, 'tools/render_screen.py', '--check-fonts'], check=True, timeout=20)
-        with (work / 'dashboard.json').open('wb') as f:
-            subprocess.run(['node', 'tools/dump_dashboard.js'], stdout=f, check=True, timeout=120)
+        if language == 'zh':
+            with (work / 'dashboard.json').open('wb') as f:
+                subprocess.run(['node', 'tools/dump_dashboard.js'], stdout=f, check=True, timeout=120)
         data = json.loads((work / 'dashboard.json').read_text())
         sections = {k: {'ok': bool(data.get(k, {}).get('ok')), 'fetchedAt': data.get(k, {}).get('fetchedAt')}
                     for k in ('weather', 'stocks', 'fx', 'news', 'mlb')}
         if not data.get('ok') or not any(v['ok'] for v in sections.values()):
             raise ValueError('all public data sources unavailable')
         subprocess.run([sys.executable, 'tools/render_screen.py', '--data', str(work / 'dashboard.json'),
-                        '--out', str(work / 'screen.png')], check=True, timeout=60)
+                        '--out', str(work / 'screen.png'), '--lang', language], check=True, timeout=60)
         from PIL import Image
         with Image.open(work / 'screen.png') as im:
             if im.size != (1072, 1448):
@@ -100,7 +101,24 @@ def main():
         'trigger': os.environ.get('GITHUB_EVENT_NAME', 'local'),
         'requestedAt': os.environ.get('DISPATCH_REQUESTED_AT', ''),
         'runUrl': 'https://github.com/' + os.environ.get('GITHUB_REPOSITORY', '') + '/actions/runs/' + run_id})
+    # Publish an independent English variant, preserving each locale's last good image.
+    english = output / 'en'
+    english.mkdir(exist_ok=True)
+    previous_en = previous_site(args.previous_url.rstrip('/') + '/en' if args.previous_url else None, english)
+    ok_en = build(english, previous_en, lambda: generate('en'), {'runId': run_id,
+        'trigger': os.environ.get('GITHUB_EVENT_NAME', 'local'), 'language': 'en'})
+    (output / 'screen-en.png').write_bytes((english / 'screen.png').read_bytes())
+    page = (english / 'index.html').read_text()
+    for zh, en in {'lang="zh"':'lang="en"', '检查更新时间…':'Checking freshness…',
+                   'Kindle 看板':'Kindle dashboard', '内容已过期 · ':'Stale · ',
+                   '本次生成失败，保留旧图 · ':'Generation failed; previous image retained · ',
+                   '正常 · ':'Ready · ', '图片生成于 ':'Image generated at ',
+                   '（':' (', ' 分钟前）':' minutes ago)', '无法读取生成状态':'Unable to read status'}.items():
+        page = page.replace(zh, en)
+    (english / 'index.html').write_text(page, encoding='utf-8')
+    ok = ok and ok_en
     if os.environ.get('GITHUB_OUTPUT'):
+
         with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
             f.write('fresh=' + str(ok).lower() + '\n')
 

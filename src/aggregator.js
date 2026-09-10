@@ -42,12 +42,13 @@ export async function buildDashboard(db) {
   const cfg = getConfig();
   const cloud = cfg.mode === 'cloud';
 
-  const [weather, stocks, fx, news, mlb] = await Promise.all([
+  const [weather, stocks, fx, news, mlb, newsEn] = await Promise.all([
     getWeather(),
     getStocks(),
     getFx(),
     getNews(),
-    getMlb()
+    getMlb(),
+    getNews('en')
   ]);
 
   const reported = cloud ? getReported() : null;
@@ -69,6 +70,7 @@ export async function buildDashboard(db) {
     clocks: getClocks(),
     fx,
     news,
+    newsEn,
     mlb
   };
 }

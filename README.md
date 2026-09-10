@@ -1,96 +1,102 @@
-# Shawn Kanban — 越狱 Kindle 常驻看板（原 Kindle Dash）
+# Shawn Kanban — an always-on dashboard for jailbroken Kindle
 
-**中文（默认）** | [English](README.en.md)
+[简体中文](README.zh-CN.md) | **English (default)**
 
-跨平台（Windows / macOS）Node.js 服务，把越狱 Kindle 的墨水屏变成一张常驻看板：
-**WorkBuddy / Claude Code / Codex 限额、天气、美股 + A股（带 30 日走势图）、世界时钟、汇率**，
-由电脑或云端生成整屏图片，KOReader 的 **Shawn Kanban** 插件负责下载和显示。看板打开时，每个整点/半点自动刷新（如 08:30、09:00）。
+A Windows/macOS Node.js service and cloud renderer for an e-ink dashboard: WorkBuddy / Claude Code / Codex activity estimates, weather, US and A-share markets, world clocks, and exchange rates. The KOReader **Shawn Kanban** plugin downloads full-screen images and refreshes at :00 and :30 while the dashboard is open.
 
-文档提供中英文版本，中文为默认入口。Kindle 菜单、看板内容和运行提示继续使用中文；英文版为使用与部署文档。Mac 局域网配置见 [Mac 安装指南](MAC_SETUP.md)。
+English is the default repository language. The Kindle plugin supports English and Chinese menus, messages, and rendered dashboards. New installations follow the KOReader interface language (Chinese locales use Chinese; other locales use English). Existing installations with saved server settings retain Chinese until you explicitly switch.
 
-## 免费云端部署
+Select **Shawn Kanban → Language / 语言 → English / 中文** to choose independently of your Kindle firmware language. This uses the same plugin on English and Chinese Kindles; a jailbroken device and KOReader are still required.
 
-采用 cron-job.org 外部定时触发 + GitHub Actions 生成 + GitHub Pages 发布：每小时第 **25、55 分钟**触发，供 Kindle 在整点、半点取图。GitHub 自带定时任务作为备用；触发和发布可能延迟，不保证准点。
+## Cloud deployment
 
-- 源码在 `main`，额度输入在独立 `runtime-data` 分支；仍属于同一仓库。
-- 新生成图片通过 Pages 部署产物发布，不提交到源码分支。生成失败时尽量保留上次成功图片。
-- [网页版看板](https://shenliucn-prog.github.io/shawn-kanban/)显示更新状态；[status.json](https://shenliucn-prog.github.io/shawn-kanban/status.json)记录生成时间和工作流结果。超过45分钟未更新时，网页标记过期。
-- 电脑关闭时仍可生成公共数据；本机额度数据取决于上报程序，可能保持最后一次的值。
+cron-job.org triggers GitHub Actions at **:25 and :55** each hour. Actions generates an image and publishes it to GitHub Pages ahead of the Kindle's next refresh. GitHub's own schedule is a fallback. Queueing and deployment can delay updates; this is not a real-time guarantee.
 
-配置与状态检查见 [云端部署](docs/CLOUD_DEPLOY.md)。外部触发所用令牌到期前需更新；不要把令牌写入仓库。
+- `main` contains source code; `runtime-data` stores quota input in a separate branch of the same repository.
+- Generated images are published as Pages deployment artifacts, not source commits. On generation failure, the pipeline attempts to retain the last good image.
+- The [dashboard](https://shenliucn-prog.github.io/shawn-kanban/) reports freshness; [status.json](https://shenliucn-prog.github.io/shawn-kanban/status.json) records generation time and workflow results. The web page marks images older than 45 minutes as stale.
+- Public data can update while the computer is off. Local activity estimates depend on the reporter and may retain their last values.
 
-## 运行（Windows 或 macOS 通用）
+See [cloud deployment](docs/CLOUD_DEPLOY.md). Renew the external trigger token before expiry; never commit it.
+
+## Run locally on Windows or macOS
+
+Requires Node.js 20 or later.
 
 ```bash
 npm install
 npm start
-# 浏览器打开 http://127.0.0.1:8787/       看网页版看板（单页、30s 整点半点自动刷新、SVG 折线图）
-#           http://127.0.0.1:8787/api/dashboard  拿 JSON
 ```
 
-在 **MacBook** 上工作时，同样地 `npm install && npm start`，让 Kindle 连同一个 WiFi，
-把插件（工具 → Shawn Kanban）里的服务器地址改成 MacBook 的局域网 IP（菜单 → 设置服务器地址）。
+Open `http://127.0.0.1:8787/` for the dashboard or `/api/dashboard` for JSON. Connect the Kindle and computer to the same network and enter the computer's LAN address in the plugin's **Set LAN server** menu. See the [Mac setup guide](MAC_SETUP.md).
 
-### 让服务开机自启 / 崩溃自拉起（可选）
-- Windows：`npm install -g pm2` 后 `pm2 start src/index.js --name shawn-kanban`
-- macOS：`brew install pm2 && pm2 start src/index.js --name shawn-kanban`，再 `pm2 save && pm2 startup`
+Optional startup management: install PM2, run `pm2 start src/index.js --name shawn-kanban`, and configure startup persistence for your operating system. On macOS, `pm2 save` and `pm2 startup` provide the setup instructions.
 
-## 配置（config.json 或环境变量，环境变量优先）
+## Configuration
 
-| 项目 | config.json | 环境变量 |
-|------|-------------|----------|
-| 绑定地址/端口 | `host` / `port` | `HOST` / `PORT` |
-| 城市与坐标 | `weather.city/lat/lon` | `DASH_CITY` / `DASH_LAT` / `DASH_LON` |
-| 股票列表 | `stocks` | `DASH_STOCKS`(JSON) |
-| 世界时钟 | `clocks` | `DASH_CLOCKS`(JSON) |
-| 限额上限 | `claudeCap` / `codexCap` | `DASH_CLAUDE_CAP` / `DASH_CODEX_CAP` |
-| WorkBuddy 库路径 | — | `WORKBUDDY_DB_PATH` |
+Environment variables override `config.json`.
 
-股票默认：苹果(AAPL)、美光(MU)、贵州茅台、长鑫科技(688825)，每只带 30 日收盘走势。
-数据源：天气=Open-Meteo、汇率=open.er-api.com、股票=腾讯财经（gtimg），**均免 API key**。
-限额中的 Claude Code / Codex 取自本机历史目录近 7 天的统计，为近似值（标注 `本地`）。
+| Setting | config.json | Environment variable |
+|---|---|---|
+| Bind address / port | `host` / `port` | `HOST` / `PORT` |
+| Weather location | `weather.city/lat/lon` | `DASH_CITY` / `DASH_LAT` / `DASH_LON` |
+| Stocks | `stocks` | `DASH_STOCKS` (JSON) |
+| World clocks | `clocks` | `DASH_CLOCKS` (JSON) |
+| Activity caps | `claudeCap` / `codexCap` | `DASH_CLAUDE_CAP` / `DASH_CODEX_CAP` |
+| WorkBuddy database | — | `WORKBUDDY_DB_PATH` |
 
-## Kindle 安装与升级
+Market data uses Tencent Finance, weather uses Open-Meteo, and FX uses open.er-api.com. These integrations do not require an API key. See `config.json` for the configured instruments and locations. AI activity metrics are estimates, not authoritative account quotas; the cloud reporter's current labels and limitations are explained in the deployment guide.
 
-需要已越狱的 Kindle 和 KOReader。
+## Kindle installation and upgrade
 
-1. 退出 KOReader，通过 USB 连接电脑。
-2. 升级前备份设备中的 `koreader/plugins/KindleDash.koplugin/`，再用本仓库同名文件夹覆盖。
-3. 安全弹出设备，重启 KOReader → 工具 → **Shawn Kanban** → **刷新看板**。
-4. 在 **设置云端图地址** 中确认完整图片地址：`https://shenliucn-prog.github.io/shawn-kanban/screen.png`。新安装默认使用此地址；升级保留原配置，原先留空的地址需手动填写。
-5. 如使用局域网服务，在 **设置局域网服务器** 中填写电脑的 `IP:8787`，电脑防火墙需放行 TCP 8787。仅用云端无需开放电脑端口。
+Requires a jailbroken Kindle with KOReader.
 
-取图顺序为 **局域网电脑 → 云端 → 本地缓存**。电脑不在线时会先等待局域网请求超时，再尝试云端。云端 HTTPS 下载校验证书，需要 KOReader 自带的有效 CA 证书文件。
+1. Exit KOReader and connect the Kindle by USB.
+2. Back up `koreader/plugins/KindleDash.koplugin/` before upgrading, then replace it with this repository's `KindleDash.koplugin/` folder.
+3. Safely eject the device, restart KOReader, and open Tools → **Shawn Kanban** → **Refresh dashboard**.
+4. Under **Set cloud image URL**, use `https://shenliucn-prog.github.io/shawn-kanban/screen-en.png` for English or `https://shenliucn-prog.github.io/shawn-kanban/screen.png` for Chinese. New installations choose the built-in URL for their language. Existing settings are preserved; an existing empty URL must be filled in manually.
+5. For local service access, set **Set LAN server** to your computer's `IP:8787` and allow inbound TCP 8787. Cloud-only use requires no inbound computer port.
 
-### 显示、休眠与刷新
+Image fallback order: **LAN computer → cloud → local cache**. An offline computer can cause a timeout before the plugin tries the cloud. HTTPS validates certificates and requires KOReader's CA bundle.
 
-- 点击屏幕顶部10%区域，或从顶部25%区域向下滑动，可退出看板；有返回键的设备也可按返回键退出。
-- 看板打开时暂停 KOReader 自动休眠，并每4分钟通过 KOReader 的 Kindle 电源接口重置系统空闲计时；兼容已有 KeepAlive 状态及充电状态。退出看板或卸载插件时取消计时并恢复原休眠设置。
-- 电源键仍可手动休眠。唤醒后约5秒尝试刷新，失败时在约20秒、60秒重试，给 Wi-Fi 恢复留出时间。Wi-Fi 需要已开启并能够重新连接；插件不会强制打开 Wi-Fi。
-- 自动刷新在整点、半点执行，仅看板显示期间取图；关闭自动刷新会取消该定时器，手动刷新和唤醒刷新仍可用。
-- **当前不是深度休眠后的定时唤醒方案**：设备真正休眠时不能依靠界面定时器刷新。常驻看板通过保持运行实现刷新，会增加耗电。
+### Display, sleep, and refresh
 
-本次修复已通过 Lua 语法和模拟行为测试；尚未完成真机睡眠、Wi-Fi 恢复和长期耗电验证。
+- Tap the top 10% of the screen, swipe down from the top 25%, or use a Back key if available to exit.
+- While the dashboard is open, the plugin pauses KOReader autosuspend and resets the Kindle native idle timer every four minutes through KOReader's power API, respecting charging and KeepAlive state. Closing the dashboard or unloading the plugin cancels the timer and restores the previous autosuspend setting.
+- The power button still permits manual sleep. After resume, refresh is attempted after approximately 5 seconds, with retries around 20 and 60 seconds if needed. Wi-Fi must already be enabled and able to reconnect; the plugin does not force Wi-Fi on.
+- Scheduled refresh runs at :00 and :30 only while the dashboard is displayed. Turning off automatic refresh cancels that timer; manual and resume refresh remain available.
+- **This does not implement scheduled wake from deep sleep.** UI timers cannot refresh a suspended device. Keeping the dashboard running increases battery consumption.
 
-### 真机检查与回退
+The fix passes Lua syntax and simulated behavior tests. Real-device sleep, Wi-Fi recovery, and long-term battery testing remain pending.
 
-关闭电脑上的本地服务后，确认 Kindle 仍能获取云端图片；看板保持打开至少35分钟，核对图中生成时间是否变化。再按电源键休眠、唤醒，确认恢复联网后刷新；退出看板后确认能正常自动休眠。
+### Device checks and rollback
 
-遇到问题可退出 KOReader，恢复备份的插件文件夹并重启。若显示旧图，先检查公开 `status.json`：云端生成时间已更新而 Kindle 没变，优先检查设备联网和插件；云端也未更新，则检查 Actions 和外部定时任务。
+Stop the local computer service and confirm cloud images still load. Leave the dashboard open for at least 35 minutes and check the image's generation time. Manually sleep and wake the Kindle, confirm refresh after network recovery, then close the dashboard and confirm normal autosuspend.
 
-## 开发验证
+To roll back, exit KOReader, restore the backed-up plugin folder, and restart. If an image is old, inspect public `status.json`: a fresh cloud timestamp points to device connectivity or the plugin; an old cloud timestamp points to Actions or the external scheduler.
+
+## Dashboard language and compatibility
+
+- The existing `screen.png` and root Pages view stay Chinese for existing users. English is available at [`screen-en.png`](https://shenliucn-prog.github.io/shawn-kanban/screen-en.png) and the [English preview](https://shenliucn-prog.github.io/shawn-kanban/en/). Each locale retains its own last good image and status history (`status.json` / `en/status.json`).
+- The plugin switches built-in cloud URLs when you change its language, while preserving custom URLs. For a custom image server, configure its matching language URL yourself. Image caches are separate by language.
+- Local image requests use `/api/screen?lang=en` or `?lang=zh`; the local browser dashboard remains Chinese. Set `PYTHON_BIN` if Python is not on PATH; install Pillow for local rendering.
+- Direct rendering supports `python tools/render_screen.py --data dashboard.json --lang en --out screen-en.png` (`zh` is the backward-compatible default).
+- English rendering uses English section labels, weather descriptions, stock symbols, MLB abbreviations, HN headlines, and `data/quotes.en.txt`. Chinese sources and `data/quotes.txt` remain unchanged. Built-in city names are localized; custom labels are not machine-translated. MLB times remain UTC+8 in both versions.
+- Language support does not remove the jailbreak/KOReader requirement or guarantee compatibility with every Kindle model. The output is 1072×1448 and scaled by the plugin; English firmware has not been tested on a physical device here.
+
+## Development checks
 
 ```bash
 npm ci
 npm run lint
 npm test
-python -m pip install lupa
+python -m pip install lupa Pillow
 python tools/check_lua.py
 python -m unittest discover -s test -p "*_test.py"
 ```
 
-Lua 行为测试使用模拟的 KOReader 接口，覆盖 HTTPS 图片收集、网络失败、定时器取消、休眠与唤醒重试及清理，不替代真机验证。
+Lua tests use a simulated KOReader API to cover HTTPS body collection, failed requests, timer cancellation, suspend/resume retries, and cleanup. They do not replace device testing.
 
-## 文档语言约定
+## Documentation languages
 
-修改功能或部署步骤时，同步更新中英文文档。中文文件为默认入口，`.en.md` 为对应英文版；代码标识符、URL 和配置键名保持一致。
+Keep Chinese and English document pairs in sync when changing behavior or setup instructions. English files are the default entry points; `.zh-CN.md` files are their Chinese counterparts. Code identifiers, URLs, and configuration keys stay unchanged.
