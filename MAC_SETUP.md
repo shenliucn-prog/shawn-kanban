@@ -1,42 +1,42 @@
-# 在 Mac 上连接 Kindle 看板
+# Connect the Kindle dashboard to a Mac
 
-**中文（默认）** | [English](MAC_SETUP.en.md) · [返回 README](README.md)
+[简体中文](MAC_SETUP.zh-CN.md) | **English (default)** · [README](README.md)
 
-本指南用于 Mac 提供局域网数据的场景。仅使用云端图片时，直接按 [Kindle 安装说明](README.md#kindle-安装与升级)部署插件，无需在 Mac 启动服务。
+Use this guide when your Mac provides data over the LAN. For cloud-only images, follow the [Kindle installation guide](README.md#kindle-installation-and-upgrade); no local Mac service is needed.
 
-## 启动本地服务
+## Start the local service
 
-安装 Node.js 20 或更高版本。在项目目录执行：
+Install Node.js 20 or later, then run in the project directory:
 
 ```bash
 npm install
 npm start
 ```
 
-浏览器打开 `http://127.0.0.1:8787/` 确认服务可用。若原生依赖编译失败，安装 Xcode 命令行工具后重试：
+Open `http://127.0.0.1:8787/` to check the service. If native dependency compilation fails, install Xcode Command Line Tools and retry:
 
 ```bash
 xcode-select --install
 ```
 
-城市、股票和端口配置见 [README](README.md#配置configjson-或环境变量环境变量优先)。
+See [configuration](README.md#configuration) for cities, stocks, and ports.
 
-## 连接 Kindle
+## Connect the Kindle
 
-1. Mac 和 Kindle 连接同一个允许设备互访的网络。
-2. 在 macOS 网络设置中查看 Mac 当前局域网 IP。
-3. KOReader → 工具 → Shawn Kanban → **设置局域网服务器**，填入 `IP:8787`，例如 `192.168.1.23:8787`。
-4. 点击 **刷新看板**。插件安装、云端地址和休眠机制见 [README](README.md#kindle-安装与升级)。
+1. Connect the Mac and Kindle to the same network with device-to-device access.
+2. Find the Mac's current LAN IP in macOS network settings.
+3. In KOReader → Tools → Shawn Kanban → **Set LAN server**, enter `IP:8787`, such as `192.168.1.23:8787`.
+4. Select **Refresh dashboard**. See the [README](README.md#kindle-installation-and-upgrade) for plugin installation, cloud configuration, and sleep behavior.
 
-## 连接失败排查
+## Troubleshooting
 
-- 先确认 Mac 本机能打开看板，再检查 IP 和端口是否正确。
-- 如果启用了 macOS 防火墙，在防火墙选项中允许实际运行服务的 Node 程序接受传入连接；无需关闭整个防火墙。
-- 访客网络或启用客户端隔离的网络可能禁止设备互访。可换用允许互访的家庭网络，或使用云端图源。
-- Mac 休眠或服务停止时，插件会尝试云端，再回退到设备缓存。
+- First verify the dashboard opens on the Mac, then check the IP and port.
+- If the macOS firewall is enabled, allow inbound connections for the Node executable running the service. There is no need to disable the entire firewall.
+- Guest networks and client isolation may block device-to-device connections. Use a home network that allows them, or use the cloud image source.
+- When the Mac sleeps or its service stops, the plugin tries the cloud and then the device cache.
 
-## 数据与设备验证
+## Data and device checks
 
-本机历史或数据库不存在时，对应活动数据可能不可用；AI 指标是估算值，详见 [云端部署说明](docs/CLOUD_DEPLOY.md#本机额度上报迁移)。
+Missing local history or databases may make the corresponding activity data unavailable. AI metrics are estimates; see [reporter limitations](docs/CLOUD_DEPLOY.md#local-reporter-migration).
 
-升级前备份插件。先验证局域网和云端分别能取图，再检查整点/半点刷新、电源键休眠后恢复，以及退出看板后的正常省电。固件更新与越狱兼容性请依据所用越狱方案的说明确认，本项目不管理固件更新。
+Back up the plugin before upgrading. Verify both LAN and cloud downloads, :00/:30 refresh, recovery after power-button sleep, and normal power saving after closing the dashboard. Consult your jailbreak's instructions for firmware compatibility; this project does not manage firmware updates.

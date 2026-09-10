@@ -9,6 +9,58 @@ import sys, os, json, math, re, urllib.request, argparse
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
 
+# Language defaults to Chinese for backward-compatible personal deployments.
+LANG = 'zh'
+LABELS = {
+    '今日新闻 · AI': 'AI News', '新闻源暂不可用': 'News unavailable',
+    'AI 额度': 'AI Activity', 'AI 额度 · 电脑离线': 'AI Activity · PC offline',
+    '未安装': 'Not installed', '不可用': 'Unavailable', '天气': 'Weather',
+    '天气不可用': 'Weather unavailable', '市场': 'Markets', '世界时钟': 'World Clocks',
+    '时钟不可用': 'Clocks unavailable', 'MLB · 道奇 / 教士': 'MLB · LAD / SD (UTC+8)',
+    '赛程暂不可用': 'Schedule unavailable', '胜': 'W', '负': 'L',
+    '无近期战报': 'No recent game', '今日一句': 'Daily Thought',
+    '（编辑 data/quotes.txt）': '(Edit data/quotes.en.txt)',
+}
+CITY_EN = {'深圳':'Shenzhen', '伦敦':'London', '洛杉矶':'Los Angeles', '纽约':'New York', '德里':'Delhi'}
+TEAM_EN = dict(zip(
+    '响尾蛇 勇士 金莺 红袜 小熊 白袜 红人 守护者 洛基 老虎 太空人 皇家 天使 道奇 马林鱼 酿酒人 双城 大都会 洋基 运动家 费城人 海盗 教士 巨人 水手 红雀 光芒 游骑兵 蓝鸟 国民'.split(),
+    'ARI ATL BAL BOS CHC CWS CIN CLE COL DET HOU KC LAA LAD MIA MIL MIN NYM NYY OAK PHI PIT SD SF SEA STL TB TEX TOR WSH'.split()))
+WEATHER_EN = {0:'Clear',1:'Mostly clear',2:'Partly cloudy',3:'Overcast',45:'Fog',48:'Rime fog',
+    51:'Drizzle',53:'Drizzle',55:'Drizzle',56:'Freezing drizzle',57:'Freezing drizzle',
+    61:'Rain',63:'Rain',65:'Heavy rain',66:'Freezing rain',67:'Freezing rain',
+    71:'Snow',73:'Snow',75:'Heavy snow',77:'Snow grains',80:'Showers',81:'Showers',82:'Heavy showers',
+    85:'Snow showers',86:'Snow showers',95:'Thunderstorm',96:'Hailstorm',99:'Hailstorm'}
+
+def tr(text):
+    return LABELS.get(text, text) if LANG == 'en' else text
+
+def localized_data(data):
+    """Translate built-in labels without mutating the Chinese payload."""
+    import copy
+    d = copy.deepcopy(data)
+    if LANG != 'en':
+        return d
+    d['news'] = d.get('newsEn') or {'ok': False, 'items': []}
+    w = d.get('weather') or {}
+    w['city'] = w.get('cityEn') or CITY_EN.get(w.get('city'), w.get('city', ''))
+    w['text'] = WEATHER_EN.get(w.get('code'), 'Unknown')
+    for stock in (d.get('stocks') or {}).get('items', []):
+        stock['label'] = stock.get('labelEn') or stock.get('sym', '')
+    for clock in (d.get('clocks') or {}).get('items', []):
+        clock['city'] = clock.get('cityEn') or CITY_EN.get(clock.get('city'), clock.get('tz', '').split('/')[-1].replace('_', ' '))
+        date = clock.get('date', '')
+        for zh, en in zip('一二三四五六日', ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']):
+            date = date.replace('周' + zh, en)
+        clock['date'] = date.replace('月','/').replace('日','')
+    for team in (d.get('mlb') or {}).get('items', []):
+        team['cn'] = team.get('abbr', '')
+        for key in ('last', 'next'):
+            game = team.get(key)
+            if game:
+                game['opp'] = TEAM_EN.get(game.get('opp'), game.get('opp', ''))
+                if game.get('live'): game['time'] = 'Live'
+    return d
+
 # ---------- 屏幕与设计常量 ----------
 SCREEN_W, SCREEN_H = 1072, 1448
 PAD = 40
@@ -198,9 +250,10 @@ def fetch_dashboard(url='http://127.0.0.1:8787/api/dashboard'):
         return json.loads(r.read().decode('utf-8'))
 
 def load_quotes():
-    p = os.path.join(DATA_DIR, 'quotes.txt')
+    p = os.path.join(DATA_DIR, 'quotes.en.txt' if LANG == 'en' else 'quotes.txt')
     if os.path.exists(p):
-        return [x.strip() for x in open(p, encoding='utf-8').read().splitlines() if x.strip()]
+        with open(p, encoding='utf-8') as source:
+            return [x.strip() for x in source.read().splitlines() if x.strip()]
     return []
 
 # ---------- 模块 ----------
@@ -208,7 +261,7 @@ def draw_header(draw, d, y):
     now = datetime.now()
     day = now.strftime('%d')
     wd = '一二三四五六日'[now.weekday()]
-    mw = '%d月 周%s' % (now.month, wd)
+    mw = (['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][now.month-1] + ' ' + ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][now.weekday()]) if LANG == 'en' else '%d月 周%s' % (now.month, wd)
     ts = now.strftime('%H:%M')
     city = (d.get('weather') or {}).get('city') or ''
     fd = f(F_DATE, bold=True)
@@ -239,7 +292,7 @@ def stamp_label(src):
     except (TypeError, ValueError, OSError, OverflowError):
         return None
     hhmm = t.strftime('%H:%M')
-    return ('缓存 %s' % hhmm) if src.get('stale') else hhmm
+    return (('Cached %s' if LANG == 'en' else '缓存 %s') % hhmm) if src.get('stale') else hhmm
 
 
 def draw_title(draw, y, text, src=None):
@@ -255,24 +308,24 @@ def draw_title(draw, y, text, src=None):
 
 def draw_news(draw, d, y):
     """今日新闻 · AI：中文一句话，按自然标点断句，绝不超页宽"""
-    y = draw_title(draw, y, '今日新闻 · AI', d.get('news'))
+    y = draw_title(draw, y, tr('今日新闻 · AI'), d.get('news'))
     items = (d.get('news') or {}).get('items', [])
     ff = f(F_BODY)
     fs = f(F_SMALL)
     if not items:
-        draw.text((PAD, y), '新闻源暂不可用', fill=GRAY, font=fs)
+        draw.text((PAD, y), tr('新闻源暂不可用'), fill=GRAY, font=fs)
         return y + F_SMALL
     n = min(len(items), 3)
     for i in range(n):
         line = '· ' + (items[i].get('title') or '')
-        draw.text((PAD, y + i * (F_BODY + 8)), clip_sentence(draw, line, ff, CONTENT_W),
+        draw.text((PAD, y + i * (F_BODY + 8)), (clip(draw, line, ff, CONTENT_W) if LANG == 'en' else clip_sentence(draw, line, ff, CONTENT_W)),
                   fill=BLACK, font=ff)
     return y + n * (F_BODY + 8)
 
 def draw_ai(draw, d, y):
     """AI 额度：WorkBuddy / Claude Code / Codex 三行统一度量衡"""
     # cloud 模式下若本机久未上报，标题直接点明"电脑离线"，不拿旧值假装新鲜
-    title = 'AI 额度' if d.get('pcOnline', True) else 'AI 额度 · 电脑离线'
+    title = tr('AI 额度') if d.get('pcOnline', True) else tr('AI 额度 · 电脑离线')
     y = draw_title(draw, y, title, d.get('quotas'))
     q = d.get('quotas', {})
     rows = [
@@ -296,7 +349,7 @@ def draw_ai(draw, d, y):
         elif v.get('ok'):
             val = '%s / %s' % (fnum(used), fnum(cap))
         else:
-            val = '未安装' if v.get('error') == 'not-installed' else '不可用'
+            val = tr('未安装') if v.get('error') == 'not-installed' else tr('不可用')
         # 右侧数值（剩余/总额）
         vx = SCREEN_W - PAD - bar_w - 20 - tw(draw, val, fs)
         draw.text((vx, ry + 4), val, fill=GRAY, font=fs)
@@ -315,23 +368,23 @@ def draw_ai(draw, d, y):
 
 def draw_weather(draw, d, y):
     w = d.get('weather', {})
-    y = draw_title(draw, y, '天气', w)
+    y = draw_title(draw, y, tr('天气'), w)
     if w.get('ok'):
         t1 = '%s°' % fnum(w.get('temp'))
         ft = f(F_BIG, bold=True)
         draw.text((PAD, y), t1, fill=BLACK, font=ft)
         tw1 = tw(draw, t1, ft)
-        det = '%s  高%s 低%s  湿%s%%' % (w.get('text', ''), fnum(w.get('high')), fnum(w.get('low')), w.get('humidity', '?'))
+        det = ('%s  H%s L%s  RH%s%%' if LANG == 'en' else '%s  高%s 低%s  湿%s%%') % (w.get('text', ''), fnum(w.get('high')), fnum(w.get('low')), w.get('humidity', '?'))
         draw.text((PAD + tw1 + 24, y + 14), det, fill=GRAY, font=f(F_SMALL))
         # 温度大字用 56px 字体，实际字形高度超过 F_BIG，固定 y+F_BIG 会让字形底部压过分隔线
         return draw.textbbox((PAD, y), t1, font=ft)[3] + 8
     else:
-        draw.text((PAD, y), '天气不可用', fill=GRAY, font=f(F_SMALL))
+        draw.text((PAD, y), tr('天气不可用'), fill=GRAY, font=f(F_SMALL))
         return y + F_SMALL + 8
 
 def draw_market(draw, d, y):
     st = (d.get('stocks') or {}).get('items', [])
-    y = draw_title(draw, y, '市场', d.get('stocks'))
+    y = draw_title(draw, y, tr('市场'), d.get('stocks'))
     ff = f(F_BODY)
     colw = CONTENT_W // 2
     rows = math.ceil(len(st) / 2)
@@ -349,38 +402,40 @@ def draw_market(draw, d, y):
 
 def draw_clocks(draw, d, y):
     """世界时钟（两列）"""
-    y = draw_title(draw, y, '世界时钟')
+    y = draw_title(draw, y, tr('世界时钟'))
     cl = (d.get('clocks') or {}).get('items', [])
     ff = f(F_BODY)
     fs = f(F_SMALL)
     colw = CONTENT_W // 2
     if not cl:
-        draw.text((PAD, y), '时钟不可用', fill=GRAY, font=fs)
+        draw.text((PAD, y), tr('时钟不可用'), fill=GRAY, font=fs)
         return y + F_SMALL
     for i in range(0, len(cl), 2):
         ry = y + (i // 2) * (F_BODY + 8)
         for j, c in enumerate(cl[i:i+2]):
             x = PAD + j * colw
             city = c.get('city', '')
+            if LANG == 'en':
+                city = clip(draw, city, ff, colw - 150)
             tme = c.get('time', '')[:5]
             draw.text((x, ry), city, fill=BLACK, font=ff)
             cw = tw(draw, city, ff)
             draw.text((x + cw + 12, ry + 2), tme, fill=BLACK, font=ff)
             dw2 = tw(draw, tme, ff)
-            date_s = (c.get('date') or '').replace('周', ' 周')
+            date_s = '' if LANG == 'en' else (c.get('date') or '').replace('周', ' 周')
             draw.text((x + cw + dw2 + 24, ry + 6), date_s, fill=GRAY, font=fs)
     return y + math.ceil(len(cl) / 2) * (F_BODY + 8)
 
 def draw_mlb(draw, d, y):
     """MLB · 道奇 / 教士：上一场比分 + 下一场时间（均为北京时间）"""
-    y = draw_title(draw, y, 'MLB · 道奇 / 教士', d.get('mlb'))
+    y = draw_title(draw, y, tr('MLB · 道奇 / 教士'), d.get('mlb'))
     items = (d.get('mlb') or {}).get('items', [])
     ff = f(F_BODY)
     fs = f(F_SMALL)
     if not items:
-        draw.text((PAD, y), '赛程暂不可用', fill=GRAY, font=fs)
+        draw.text((PAD, y), tr('赛程暂不可用'), fill=GRAY, font=fs)
         return y + F_SMALL
-    name_w = 80
+    name_w = 88 if LANG == 'en' else 80
     col_a = PAD + name_w
     col_b = PAD + name_w + 410
 
@@ -397,12 +452,12 @@ def draw_mlb(draw, d, y):
             s = '%s %s%s %s-%s' % (last.get('date', ''), mark_of(last), last.get('opp', ''),
                                    last.get('us', 0), last.get('them', 0))
             draw.text((col_a, ry), s, fill=GRAY, font=ff)
-            res = '胜' if last.get('win') else '负'
+            res = tr('胜') if last.get('win') else tr('负')
             # 胜=黑，负=灰：e-ink 上靠明度区分，不用颜色
             draw.text((col_a + tw(draw, s, ff) + 12, ry), res,
                       fill=BLACK if last.get('win') else GRAY, font=f(F_BODY, bold=True))
         else:
-            draw.text((col_a, ry), '无近期战报', fill=GRAY, font=fs)
+            draw.text((col_a, ry), tr('无近期战报'), fill=GRAY, font=fs)
         if nxt:
             s2 = '→ %s %s %s%s' % (nxt.get('date', ''), nxt.get('time', ''),
                                    mark_of(nxt), nxt.get('opp', ''))
@@ -410,9 +465,9 @@ def draw_mlb(draw, d, y):
     return y + min(len(items), 2) * (F_BODY + 8)
 
 def draw_quote(draw, d, y, quotes):
-    y = draw_title(draw, y, '今日一句')
+    y = draw_title(draw, y, tr('今日一句'))
     if not quotes:
-        draw.text((PAD, y), '（编辑 data/quotes.txt）', fill=GRAY, font=f(F_SMALL))
+        draw.text((PAD, y), tr('（编辑 data/quotes.txt）'), fill=GRAY, font=f(F_SMALL))
         return y + F_SMALL
     ff = f(F_BODY)
     q = quotes[datetime.now().timetuple().tm_yday % len(quotes)]
@@ -434,11 +489,16 @@ def draw_footer(draw, d, y, offline=False, last_ok=None):
     now = datetime.now().strftime('%H:%M')
     txt = ('Shawn Kanban · 离线 · 最后 %s · 顶部下滑返回' % (last_ok or '?')) if offline \
         else ('Shawn Kanban · 更新 %s · 顶部下滑返回' % now)
+    if LANG == 'en':
+        txt = ('Shawn Kanban · Offline · Last %s' % (last_ok or '?')) if offline else 'Shawn Kanban · Updated %s · Swipe from top to exit' % now
     draw.text((PAD, y), txt, fill=GRAY, font=f(F_FOOT))
     return y + F_FOOT
 
 # ---------- 主流程 ----------
-def render(d, out_path=None):
+def render(d, out_path=None, language="zh"):
+    global LANG
+    LANG = language
+    d = localized_data(d)
     img = Image.new('L', (SCREEN_W, SCREEN_H), WHITE)
     draw = ImageDraw.Draw(img)
     quotes = load_quotes()
@@ -475,6 +535,7 @@ def render(d, out_path=None):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument('--lang', choices=['en', 'zh'], default='zh')
     ap.add_argument('--out')
     ap.add_argument('--data')
     ap.add_argument('--url', default='http://127.0.0.1:8787/api/dashboard')
@@ -497,7 +558,7 @@ def main():
         print('[font] OK', file=sys.stderr, flush=True)
         return
     d = json.load(open(a.data, encoding='utf-8')) if a.data else fetch_dashboard(a.url)
-    render(d, a.out)
+    render(d, a.out, a.lang)
 
 if __name__ == '__main__':
     main()

@@ -50,7 +50,78 @@ local KindleDash = WidgetContainer:new{
     sorting_hint = "tools",
 }
 
+-- Interface locale is independent of the Kindle firmware language.
+-- Preserve Chinese for existing plugin settings; new installs follow KOReader.
+function KindleDash:loadLanguage()
+    local settings = LuaSettings:open(self:settingsPath())
+    local saved = settings:readSetting("language")
+    if saved == "zh" or saved == "en" then return saved end
+    if settings:has("host") or settings:has("cloud") or settings:has("port") then
+        settings:saveSetting("language", "zh")
+        settings:flush()
+        return "zh"
+    end
+    local locale = G_reader_settings and G_reader_settings:readSetting("language") or "en"
+    local language = tostring(locale):lower():match("^zh") and "zh" or "en"
+    settings:saveSetting("language", language)
+    settings:flush()
+    return language
+end
+
+local EN = {
+    ["本机"] = "LAN",
+    ["云端"] = "Cloud",
+    ["未配置任何图源"] = "No image source configured",
+    [" 均不可用"] = " unavailable",
+    ["看板显示失败:\n"] = "Unable to display dashboard:\n",
+    ["看板失败:\n"] = "Dashboard error:\n",
+    ["离线 · 最后 "] = "Offline · Last image: ",
+    ["离线 · 显示上次缓存"] = "Offline · Showing cached image",
+    ["刷新失败: "] = "Refresh failed: ",
+    ["来自云端（电脑未连上）"] = "Cloud image (LAN unavailable)",
+    ["自动刷新: 开 (整点/半点)"] = "Auto refresh: on (:00 / :30)",
+    ["自动刷新: 关"] = "Auto refresh: off",
+    ["服务器地址 (IP:端口)"] = "LAN server (IP:port)",
+    ["例如 192.168.31.188:8787"] = "Example: 192.168.1.23:8787",
+    ["取消"] = "Cancel",
+    ["保存"] = "Save",
+    ["已保存: "] = "Saved: ",
+    ["云端图地址 (完整 URL)"] = "Cloud image URL (full URL)",
+    ["电脑关机时从这儿取图。留空则只用局域网。"] = "Used when the computer is unavailable. Leave empty for LAN only.",
+    ["https://用户名.github.io/shawn-kanban/screen.png"] = "https://username.github.io/shawn-kanban/screen-en.png",
+    ["已清空云端地址"] = "Cloud URL cleared",
+    ["刷新看板"] = "Refresh dashboard",
+    ["设置局域网服务器"] = "Set LAN server",
+    ["设置云端图地址"] = "Set cloud image URL",
+    ["切换自动刷新 (整点/半点)"] = "Toggle auto refresh (:00 / :30)",
+    ["关于"] = "About",
+    ["Shawn Kanban\n取图顺序：局域网 PC > 云端 Pages > 本地缓存\n"] = "Shawn Kanban\nImage sources: LAN > Cloud > Cache\n",
+    ["云端每半小时触发 GitHub Actions 渲染\n"] = "Cloud generation is triggered every half hour\n",
+    ["AI 额度走局域网实时，关机显示最后值\n"] = "AI activity estimates may retain old values offline\n",
+    ["唤醒即刷 + 30 分自动\n顶部下滑/顶部点击返回"] = "Refresh on resume and every half hour\nTap/swipe down from the top to exit",
+}
+function KindleDash:tr(text)
+    return self.language == "en" and (EN[text] or text) or text
+end
+
+function KindleDash:setLanguage(language)
+    local settings = LuaSettings:open(self:settingsPath())
+    settings:saveSetting("language", language)
+    self.language = language
+    -- Only migrate our built-in URLs; custom image endpoints remain user-owned.
+    if self.cloud == DEFAULT_CLOUD or self.cloud == DEFAULT_CLOUD:gsub("screen.png$", "screen-en.png") then
+        self.cloud = language == "en" and DEFAULT_CLOUD:gsub("screen.png$", "screen-en.png") or DEFAULT_CLOUD
+        settings:saveSetting("cloud", self.cloud)
+    end
+    settings:flush()
+    UIManager:show(InfoMessage:new{
+        text = language == "en" and "English selected. Reopen the menu to refresh labels." or "已选择中文，重新打开菜单即可更新。",
+        timeout = 4,
+    })
+end
+
 function KindleDash:init()
+    self.language = self:loadLanguage()
     self.auto_on = true
     self.host = self:loadHost()
     self.cloud = self:loadCloud()
@@ -71,10 +142,10 @@ function KindleDash:cacheDir()
     return DataStorage:getSettingsDir()
 end
 function KindleDash:cacheImg()
-    return self:cacheDir() .. "/" .. CACHE_IMG_NAME
+    return self:cacheDir() .. "/" .. (self.language == "en" and "kindledash_screen_en.png" or CACHE_IMG_NAME)
 end
 function KindleDash:cacheTs()
-    return self:cacheDir() .. "/" .. CACHE_TS_NAME
+    return self:cacheDir() .. "/" .. (self.language == "en" and "kindledash_ts_en.txt" or CACHE_TS_NAME)
 end
 function KindleDash:ensureCacheDir()
     local dir = self:cacheDir()
@@ -127,7 +198,7 @@ function KindleDash:loadCloud()
     if ok and s and s:has("cloud") then
         return s:readSetting("cloud") or DEFAULT_CLOUD
     end
-    return DEFAULT_CLOUD
+    return self.language == "en" and DEFAULT_CLOUD:gsub("screen.png$", "screen-en.png") or DEFAULT_CLOUD
 end
 function KindleDash:saveCloud(url)
     local ok, s = pcall(function() return LuaSettings:open(self:settingsPath()) end)
@@ -178,10 +249,10 @@ end
 function KindleDash:endpoints()
     local list = {}
     if self.host and self.host ~= "" then
-        table.insert(list, { url = "http://" .. self.host .. "/api/screen", name = "本机" })
+        table.insert(list, { url = "http://" .. self.host .. "/api/screen?lang=" .. (self.language or "zh"), name = self:tr("本机") })
     end
     if self.cloud and self.cloud ~= "" then
-        table.insert(list, { url = self.cloud, name = "云端" })
+        table.insert(list, { url = self.cloud, name = self:tr("云端") })
     end
     return list
 end
@@ -228,7 +299,7 @@ end
 function KindleDash:fetchScreen()
     local eps = self:endpoints()
     if #eps == 0 then
-        return nil, "未配置任何图源"
+        return nil, self:tr("未配置任何图源")
     end
     local tried = {}
     for _, ep in ipairs(eps) do
@@ -238,7 +309,7 @@ function KindleDash:fetchScreen()
         end
         table.insert(tried, ep.name)
     end
-    return nil, table.concat(tried, "/") .. " 均不可用"
+    return nil, table.concat(tried, "/") .. self:tr(" 均不可用")
 end
 
 -- 保存 PNG 到文件（缓存目录持久化，Kindle 重启后仍在）
@@ -273,7 +344,7 @@ function KindleDash:showDashboard(img_path, offline)
     if not ok then
         logger.err("ShawnKanban showDashboard failed: ", tostring(err))
         UIManager:show(InfoMessage:new{
-            text = "看板显示失败:\n" .. tostring(err),
+            text = self:tr("看板显示失败:\n") .. tostring(err),
             timeout = 8,
         })
     end
@@ -342,7 +413,7 @@ function KindleDash:safeRefresh()
     local ok, err = pcall(function() self:refreshDashboard(false, true) end)   -- 用户主动：必须显示看板
     if not ok then
         logger.err("ShawnKanban refresh crashed: ", tostring(err))
-        UIManager:show(InfoMessage:new{ text = "看板失败:\n" .. tostring(err), timeout = 8 })
+        UIManager:show(InfoMessage:new{ text = self:tr("看板失败:\n") .. tostring(err), timeout = 8 })
     end
 end
 
@@ -364,12 +435,12 @@ function KindleDash:refreshDashboard(silent, manual)
                 self:showDashboard(cacheImg, true)
                 if not silent then
                     local ts = self:readTs()
-                    local msg = ts and ("离线 · 最后 " .. ts) or "离线 · 显示上次缓存"
+                    local msg = ts and (self:tr("离线 · 最后 ") .. ts) or self:tr("离线 · 显示上次缓存")
                     UIManager:show(InfoMessage:new{ text = msg, timeout = 2 })
                 end
             end
         elseif not silent then
-            UIManager:show(InfoMessage:new{ text = "刷新失败: " .. tostring(err), timeout = 3 })
+            UIManager:show(InfoMessage:new{ text = self:tr("刷新失败: ") .. tostring(err), timeout = 3 })
         end
         logger.warn("ShawnKanban refresh failed:", err)
         return false
@@ -392,9 +463,9 @@ function KindleDash:refreshDashboard(silent, manual)
     end
 
     self:showDashboard(cacheImg, false)
-    if not silent and source == "云端" then
+    if not silent and source == self:tr("云端") then
         -- 电脑没开时走的正是这条路，明确告诉用户数据来自云端
-        UIManager:show(InfoMessage:new{ text = "来自云端（电脑未连上）", timeout = 2 })
+        UIManager:show(InfoMessage:new{ text = self:tr("来自云端（电脑未连上）"), timeout = 2 })
     end
     return true
 end
@@ -465,9 +536,9 @@ function KindleDash:toggleAutoRefresh()
     if self._auto_timer then UIManager:unschedule(self._auto_timer) end
     if self.auto_on then
         self:armAutoRefresh()
-        UIManager:show(InfoMessage:new{ text = "自动刷新: 开 (整点/半点)", timeout = 2 })
+        UIManager:show(InfoMessage:new{ text = self:tr("自动刷新: 开 (整点/半点)"), timeout = 2 })
     else
-        UIManager:show(InfoMessage:new{ text = "自动刷新: 关", timeout = 2 })
+        UIManager:show(InfoMessage:new{ text = self:tr("自动刷新: 关"), timeout = 2 })
     end
 end
 
@@ -475,18 +546,18 @@ end
 function KindleDash:setServerAddress()
     local dialog
     dialog = InputDialog:new{
-        title = "服务器地址 (IP:端口)",
+        title = self:tr("服务器地址 (IP:端口)"),
         input = self.host,
-        input_hint = "例如 192.168.31.188:8787",
+        input_hint = self:tr("例如 192.168.31.188:8787"),
         buttons = {
             {
-                { text = "取消", callback = function() UIManager:close(dialog) end },
-                { text = "保存", callback = function()
+                { text = self:tr("取消"), callback = function() UIManager:close(dialog) end },
+                { text = self:tr("保存"), callback = function()
                     local v = dialog:getInputValue()
                     if v and v ~= "" then
                         self:saveHost(v)
                         UIManager:close(dialog)
-                        UIManager:show(InfoMessage:new{ text = "已保存: " .. v, timeout = 2 })
+                        UIManager:show(InfoMessage:new{ text = self:tr("已保存: ") .. v, timeout = 2 })
                     end
                 end }
             }
@@ -498,19 +569,19 @@ end
 function KindleDash:setCloudUrl()
     local dialog
     dialog = InputDialog:new{
-        title = "云端图地址 (完整 URL)",
-        description = "电脑关机时从这儿取图。留空则只用局域网。",
+        title = self:tr("云端图地址 (完整 URL)"),
+        description = self:tr("电脑关机时从这儿取图。留空则只用局域网。"),
         input = self.cloud or "",
-        input_hint = "https://用户名.github.io/shawn-kanban/screen.png",
+        input_hint = self:tr("https://用户名.github.io/shawn-kanban/screen.png"),
         buttons = {
             {
-                { text = "取消", callback = function() UIManager:close(dialog) end },
-                { text = "保存", callback = function()
+                { text = self:tr("取消"), callback = function() UIManager:close(dialog) end },
+                { text = self:tr("保存"), callback = function()
                     local v = dialog:getInputValue() or ""
                     self:saveCloud(v)
                     UIManager:close(dialog)
                     UIManager:show(InfoMessage:new{
-                        text = v == "" and "已清空云端地址" or "已保存: " .. v, timeout = 3
+                        text = v == "" and self:tr("已清空云端地址") or self:tr("已保存: ") .. v, timeout = 3
                     })
                 end }
             }
@@ -523,21 +594,27 @@ function KindleDash:addToMainMenu(menu_items)
     menu_items["0kindledash"] = {
         text = "Shawn Kanban",
         sorting_hint = "tools",
-        sub_item_table = {
-            { text = "刷新看板",     callback = function() self:safeRefresh() end },
-            { text = "设置局域网服务器", callback = function() self:setServerAddress() end },
-            { text = "设置云端图地址", callback = function() self:setCloudUrl() end },
-            { text = "切换自动刷新 (整点/半点)", callback = function() self:toggleAutoRefresh() end },
-            { text = "关于", callback = function()
+        sub_item_table_func = function() return {
+            { text = "Language / 语言", sub_item_table = {
+                { text = "English", checked_func = function() return self.language == "en" end,
+                  callback = function() self:setLanguage("en") end },
+                { text = "中文", checked_func = function() return self.language == "zh" end,
+                  callback = function() self:setLanguage("zh") end },
+            } },
+            { text = self:tr("刷新看板"),     callback = function() self:safeRefresh() end },
+            { text = self:tr("设置局域网服务器"), callback = function() self:setServerAddress() end },
+            { text = self:tr("设置云端图地址"), callback = function() self:setCloudUrl() end },
+            { text = self:tr("切换自动刷新 (整点/半点)"), callback = function() self:toggleAutoRefresh() end },
+            { text = self:tr("关于"), callback = function()
                 UIManager:show(InfoMessage:new{
-                    text = "Shawn Kanban\n取图顺序：局域网 PC > 云端 Pages > 本地缓存\n"
-                       .. "云端每半小时触发 GitHub Actions 渲染\n"
-                       .. "AI 额度走局域网实时，关机显示最后值\n"
-                       .. "唤醒即刷 + 30 分自动\n顶部下滑/顶部点击返回",
+                    text = self:tr("Shawn Kanban\n取图顺序：局域网 PC > 云端 Pages > 本地缓存\n")
+                       .. self:tr("云端每半小时触发 GitHub Actions 渲染\n")
+                       .. self:tr("AI 额度走局域网实时，关机显示最后值\n")
+                       .. self:tr("唤醒即刷 + 30 分自动\n顶部下滑/顶部点击返回"),
                     timeout = 6
                 })
             end }
-        }
+        } end
     }
 end
 

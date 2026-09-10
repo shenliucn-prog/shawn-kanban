@@ -5,12 +5,12 @@ import { buildDashboard } from './aggregator.js';
 import { readStatus } from './db.js';
 import { config } from './config.js';
 
-const PYTHON = process.env.PYTHON_BIN || 'C:/Users/Shen/.workbuddy/binaries/python/versions/3.13.12/python.exe';
+const PYTHON = process.env.PYTHON_BIN || (process.platform === 'win32' ? 'python' : 'python3');
 
-function renderScreenPng() {
+function renderScreenPng(language = 'zh') {
   return new Promise((resolve, reject) => {
     const script = path.join(process.cwd(), 'tools', 'render_screen.py');
-    const child = spawn(PYTHON, [script], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(PYTHON, [script, '--lang', language], { stdio: ['ignore', 'pipe', 'pipe'] });
     const chunks = [];
     child.stdout.on('data', d => chunks.push(d));
     child.stderr.on('data', d => process.stderr.write('[render] ' + d));
@@ -239,7 +239,7 @@ export function createServer({ db = null, cfg = config } = {}) {
 
     if (url.pathname === '/api/screen') {
       try {
-        const png = await renderScreenPng();
+        const png = await renderScreenPng(url.searchParams.get('lang') === 'en' ? 'en' : 'zh');
         res.writeHead(200, {
           'Content-Type': 'image/png',
           'Content-Length': png.length,
