@@ -2,11 +2,18 @@
 
 跨平台（Windows / macOS）Node.js 服务，把越狱 Kindle 的墨水屏变成一张常驻看板：
 **WorkBuddy / Claude Code / Codex 限额、天气、美股 + A股（带 30 日走势图）、世界时钟、汇率**，
-通过局域网喂给 KOReader 的 **Shawn Kanban** 插件，每个整点/半点自动刷新（如 08:30、09:00）。
+由电脑或云端生成整屏图片，KOReader 的 **Shawn Kanban** 插件负责下载和显示。看板打开时，每个整点/半点自动刷新（如 08:30、09:00）。
 
 ## 免费云端部署
 
-采用外部定时触发 + GitHub Actions 生成 + Pages 部署产物。源码在 main，额度输入在独立 runtime-data 分支，图片不写入源码。配置与状态检查见 [云端部署](docs/CLOUD_DEPLOY.md)。
+采用 cron-job.org 外部定时触发 + GitHub Actions 生成 + GitHub Pages 发布：每小时第 **25、55 分钟**触发，供 Kindle 在整点、半点取图。GitHub 自带定时任务作为备用；触发和发布可能延迟，不保证准点。
+
+- 源码在 `main`，额度输入在独立 `runtime-data` 分支；仍属于同一仓库。
+- 新生成图片通过 Pages 部署产物发布，不提交到源码分支。生成失败时尽量保留上次成功图片。
+- [网页版看板](https://shenliucn-prog.github.io/shawn-kanban/)显示更新状态；[status.json](https://shenliucn-prog.github.io/shawn-kanban/status.json)记录生成时间和工作流结果。超过45分钟未更新时，网页标记过期。
+- 电脑关闭时仍可生成公共数据；本机额度数据取决于上报程序，可能保持最后一次的值。
+
+配置与状态检查见 [云端部署](docs/CLOUD_DEPLOY.md)。外部触发所用令牌到期前需更新；不要把令牌写入仓库。
 
 ## 运行（Windows 或 macOS 通用）
 
@@ -39,8 +46,43 @@ npm start
 数据源：天气=Open-Meteo、汇率=open.er-api.com、股票=腾讯财经（gtimg），**均免 API key**。
 限额中的 Claude Code / Codex 取自本机历史目录近 7 天的统计，为近似值（标注 `本地`）。
 
-## Kindle 端（一次性部署）
-把 `KindleDash.koplugin/` 整个文件夹拷到 Kindle 的 `koreader/plugins/` 下，
-重启 KOReader → 工具 → **Shawn Kanban** → 刷新看板。防火墙需放行 `TCP 8787` 入站。
+## Kindle 安装与升级
 
-Kindle 上全屏显示，**点击左右半屏上下翻页，按返回键关闭**（无底部按钮栏）。
+需要已越狱的 Kindle 和 KOReader。
+
+1. 退出 KOReader，通过 USB 连接电脑。
+2. 升级前备份设备中的 `koreader/plugins/KindleDash.koplugin/`，再用本仓库同名文件夹覆盖。
+3. 安全弹出设备，重启 KOReader → 工具 → **Shawn Kanban** → **刷新看板**。
+4. 在 **设置云端图地址** 中确认完整图片地址：`https://shenliucn-prog.github.io/shawn-kanban/screen.png`。新安装默认使用此地址；升级保留原配置，原先留空的地址需手动填写。
+5. 如使用局域网服务，在 **设置局域网服务器** 中填写电脑的 `IP:8787`，电脑防火墙需放行 TCP 8787。仅用云端无需开放电脑端口。
+
+取图顺序为 **局域网电脑 → 云端 → 本地缓存**。电脑不在线时会先等待局域网请求超时，再尝试云端。云端 HTTPS 下载校验证书，需要 KOReader 自带的有效 CA 证书文件。
+
+### 显示、休眠与刷新
+
+- 点击屏幕顶部10%区域，或从顶部25%区域向下滑动，可退出看板；有返回键的设备也可按返回键退出。
+- 看板打开时暂停 KOReader 自动休眠，并每4分钟通过 KOReader 的 Kindle 电源接口重置系统空闲计时；兼容已有 KeepAlive 状态及充电状态。退出看板或卸载插件时取消计时并恢复原休眠设置。
+- 电源键仍可手动休眠。唤醒后约5秒尝试刷新，失败时在约20秒、60秒重试，给 Wi-Fi 恢复留出时间。Wi-Fi 需要已开启并能够重新连接；插件不会强制打开 Wi-Fi。
+- 自动刷新在整点、半点执行，仅看板显示期间取图；关闭自动刷新会取消该定时器，手动刷新和唤醒刷新仍可用。
+- **当前不是深度休眠后的定时唤醒方案**：设备真正休眠时不能依靠界面定时器刷新。常驻看板通过保持运行实现刷新，会增加耗电。
+
+本次修复已通过 Lua 语法和模拟行为测试；尚未完成真机睡眠、Wi-Fi 恢复和长期耗电验证。
+
+### 真机检查与回退
+
+关闭电脑上的本地服务后，确认 Kindle 仍能获取云端图片；看板保持打开至少35分钟，核对图中生成时间是否变化。再按电源键休眠、唤醒，确认恢复联网后刷新；退出看板后确认能正常自动休眠。
+
+遇到问题可退出 KOReader，恢复备份的插件文件夹并重启。若显示旧图，先检查公开 `status.json`：云端生成时间已更新而 Kindle 没变，优先检查设备联网和插件；云端也未更新，则检查 Actions 和外部定时任务。
+
+## 开发验证
+
+```bash
+npm ci
+npm run lint
+npm test
+python -m pip install lupa
+python tools/check_lua.py
+python -m unittest discover -s test -p "*_test.py"
+```
+
+Lua 行为测试使用模拟的 KOReader 接口，覆盖 HTTPS 图片收集、网络失败、定时器取消、休眠与唤醒重试及清理，不替代真机验证。
