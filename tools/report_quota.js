@@ -6,8 +6,8 @@
 // 环境变量：
 //   GITHUB_TOKEN   必填（要能写仓库，勾 repo 或 contents:write）
 //   GITHUB_REPO   owner/repo，例如 shen/shawn-kanban
-//   GITHUB_BRANCH 默认 main
-//   REPORT_PATH   仓库内路径，默认 data/quotas.json
+//   GITHUB_BRANCH 默认 runtime-data
+//   REPORT_PATH   仓库内路径，默认 quotas.json
 //   REPORT_EVERY  最小上报间隔（毫秒），默认 5 分钟
 //   REPORT_DRY    设为 1 时只写本地文件，不推远端
 //
@@ -21,16 +21,19 @@ import { format } from 'node:util';
 import { dirname, join } from 'node:path';
 import { openDb, closeDb } from '../src/db.js';
 import { config } from '../src/config.js';
+import { shouldUpload } from '../src/report-policy.js';
 import { getWorkbuddy } from '../src/providers/workbuddy.js';
 import { getClaudeCodeUsage } from '../src/providers/claudecode.js';
 import { getCodexUsage } from '../src/providers/codex.js';
 
-const LOCAL_OUT = join(process.cwd(), 'data', 'quotas.json');
-const REMOTE_PATH = process.env.REPORT_PATH || 'data/quotas.json';
+const LOCAL_OUT = config.quotasFile;
+const ACK_OUT = join(dirname(LOCAL_OUT), 'last-upload.json');
+const REMOTE_PATH = process.env.REPORT_PATH || 'quotas.json';
 const REPO = process.env.GITHUB_REPO || '';
-const BRANCH = process.env.GITHUB_BRANCH || 'main';
+const BRANCH = process.env.GITHUB_BRANCH || 'runtime-data';
+if (BRANCH === 'main' || BRANCH === 'master') throw new Error('Set GITHUB_BRANCH=runtime-data; uploads to source branches are disabled');
 const EVERY = Number(process.env.REPORT_EVERY || 5 * 60 * 1000);
-const DRY = process.env.REPORT_DRY === '1';
+const DRY = process.env.REPORT_DRY === '1' || process.argv.includes('--dry');
 
 // 注意：console.log 只对第一个参数做 %s 替换，所以这里先 format 再拼时间戳
 function log(...a) {
@@ -60,25 +63,6 @@ function collect() {
   }
 }
 
-// 没有实质变化就不打扰 GitHub（省 API 额度、减少无意义 commit）
-function significant(prev, next) {
-  if (!prev || !prev.quotas) return true;
-  const num = (v) => (typeof v === 'number' ? v : null);
-  for (const k of ['workbuddy', 'claudecode', 'codex']) {
-    const a = prev.quotas[k] || {};
-    const b = (next.quotas && next.quotas[k]) || {};
-    if (!!a.ok !== !!b.ok) return true;
-    const ra = num(a.remaining);
-    const rb = num(b.remaining);
-    if (ra == null || rb == null) {
-      if (ra !== rb) return true;
-      continue;
-    }
-    if (Math.abs(ra - rb) > Math.max(1, Math.abs(ra) * 0.005)) return true;
-  }
-  return false;
-}
-
 async function pushToGithub(content) {
   const token = process.env.GITHUB_TOKEN;
   if (!token || !REPO) {
@@ -94,7 +78,7 @@ async function pushToGithub(content) {
   };
 
   let sha = null;
-  const getRes = await fetch(api + '?ref=' + BRANCH, { headers });
+  const getRes = await fetch(api + '?ref=' + BRANCH, { headers, signal: AbortSignal.timeout(15000) });
   if (getRes.ok) {
     const j = await getRes.json();
     sha = j.sha;
@@ -113,7 +97,8 @@ async function pushToGithub(content) {
   const res = await fetch(api, {
     method: 'PUT',
     headers: { ...headers, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15000)
   });
   if (!res.ok) {
     log('gh put failed', res.status, (await res.text()).slice(0, 200));
@@ -129,12 +114,12 @@ async function once(opts = {}) {
 
   let prev = null;
   try {
-    if (existsSync(LOCAL_OUT)) prev = JSON.parse(readFileSync(LOCAL_OUT, 'utf-8'));
+    if (existsSync(ACK_OUT)) prev = JSON.parse(readFileSync(ACK_OUT, 'utf-8'));
   } catch {
     /* ignore */
   }
 
-  const changed = significant(prev, data) || opts.force;
+  const changed = shouldUpload(prev, data, Date.now(), opts.force);
   try {
     mkdirSync(dirname(LOCAL_OUT), { recursive: true });
     writeFileSync(LOCAL_OUT, text);
@@ -152,18 +137,19 @@ async function once(opts = {}) {
       q.claudecode && q.claudecode.cap,
       q.codex && q.codex.ok ? q.codex.remaining + '/' + q.codex.cap : 'n/a'
     );
-    if (!DRY) await pushToGithub(text);
+    if (!DRY && await pushToGithub(text)) writeFileSync(ACK_OUT, text);
   } else {
     log('no significant change');
   }
 }
 
 const args = process.argv.slice(2);
-await once({ force: args.includes('--force') });
+await once({ force: args.includes('--force') }).catch(e => log('upload failed:', e.message));
 
 if (args.includes('--loop')) {
   log('loop mode, every', Math.round(EVERY / 1000), 's');
-  setInterval(() => {
-    once().catch((e) => log('loop error:', e.message));
-  }, EVERY);
+  for (;;) {
+    await new Promise(resolve => setTimeout(resolve, EVERY));
+    await once().catch(e => log('loop error:', e.message));
+  }
 }

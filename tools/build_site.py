@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""Build a Pages artifact; failed attempts preserve the last published good PNG."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+import urllib.request
+
+
+def write_json(path, value):
+    Path(path).write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
+
+
+def previous_site(base, output):
+    previous = {}
+    if not base:
+        return previous
+    try:
+        with urllib.request.urlopen(base.rstrip('/') + '/status.json?t=' + str(time.time_ns()), timeout=20) as r:
+            previous = json.load(r)
+        with urllib.request.urlopen(base.rstrip('/') + '/screen.png?t=' + str(time.time_ns()), timeout=20) as r:
+            png = r.read(4 * 1024 * 1024 + 1)
+        if len(png) > 4 * 1024 * 1024 or hashlib.sha256(png).hexdigest() != previous.get('sha256'):
+            raise ValueError('previous published image checksum mismatch')
+        from PIL import Image
+        import io
+        with Image.open(io.BytesIO(png)) as im:
+            if im.size != (1072, 1448):
+                raise ValueError('invalid previous image size')
+            im.verify()
+        (output / 'screen.png').write_bytes(png)
+        return previous
+    except Exception as e:
+        print('Previous generation unavailable:', e, file=sys.stderr)
+        return {}
+
+
+def build(output, previous, generate, metadata):
+    started = int(time.time() * 1000)
+    try:
+        png, sections = generate()
+        (output / 'screen.png').write_bytes(png)
+        state = {**metadata, 'state': 'ready', 'generatedAt': int(time.time() * 1000),
+                 'sha256': hashlib.sha256(png).hexdigest(), 'sections': sections}
+        success = True
+    except Exception as e:
+        print('Generation failed:', e, file=sys.stderr)
+        if not previous or not (output / 'screen.png').exists():
+            # No artifact is published; Pages keeps its existing deployment.
+            raise
+        state = {**previous, **metadata, 'state': 'failed', 'error': str(e)[:500]}
+        success = False
+    state.update(lastAttemptAt=started, completedAt=int(time.time() * 1000), staleAfterSeconds=2700)
+    history = previous.get('history', [])[-255:]
+    history.append({k: state.get(k) for k in ('runId', 'trigger', 'requestedAt', 'lastAttemptAt', 'completedAt', 'state', 'generatedAt')})
+    state['history'] = history
+    write_json(output / 'status.json', state)
+    (output / '.nojekyll').write_text('')
+    (output / 'index.html').write_text('''<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Shawn Kanban</title><style>body{font-family:system-ui;max-width:720px;margin:24px auto;padding:16px}img{width:100%}</style><h1>Shawn Kanban</h1><p id="status">检查更新时间…</p><img src="screen.png" alt="Kindle 看板"><script>
+async function refresh(){try{const s=await(await fetch('status.json?t='+Date.now())).json();const age=Math.max(0,Math.floor((Date.now()-s.generatedAt)/60000));document.getElementById('status').textContent=(age>45?'内容已过期 · ':s.state==='failed'?'本次生成失败，保留旧图 · ':'正常 · ')+'图片生成于 '+new Date(s.generatedAt).toLocaleString()+'（'+age+' 分钟前）';}catch(e){document.getElementById('status').textContent='无法读取生成状态';}}refresh();setInterval(refresh,60000);
+</script></html>''', encoding='utf-8')
+    return success
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--output', default='_site')
+    ap.add_argument('--previous-url')
+    args = ap.parse_args()
+    output = Path(args.output)
+    output.mkdir(parents=True, exist_ok=True)
+    previous = previous_site(args.previous_url, output)
+    work = output.parent / 'render-work'
+    work.mkdir(exist_ok=True)
+
+    def generate():
+        subprocess.run([sys.executable, 'tools/render_screen.py', '--check-fonts'], check=True, timeout=20)
+        with (work / 'dashboard.json').open('wb') as f:
+            subprocess.run(['node', 'tools/dump_dashboard.js'], stdout=f, check=True, timeout=120)
+        data = json.loads((work / 'dashboard.json').read_text())
+        sections = {k: {'ok': bool(data.get(k, {}).get('ok')), 'fetchedAt': data.get(k, {}).get('fetchedAt')}
+                    for k in ('weather', 'stocks', 'fx', 'news', 'mlb')}
+        if not data.get('ok') or not any(v['ok'] for v in sections.values()):
+            raise ValueError('all public data sources unavailable')
+        subprocess.run([sys.executable, 'tools/render_screen.py', '--data', str(work / 'dashboard.json'),
+                        '--out', str(work / 'screen.png')], check=True, timeout=60)
+        from PIL import Image
+        with Image.open(work / 'screen.png') as im:
+            if im.size != (1072, 1448):
+                raise ValueError('unexpected image size')
+            im.verify()
+        return (work / 'screen.png').read_bytes(), sections
+
+    run_id = os.environ.get('GITHUB_RUN_ID', '')
+    ok = build(output, previous, generate, {'runId': run_id,
+        'trigger': os.environ.get('GITHUB_EVENT_NAME', 'local'),
+        'requestedAt': os.environ.get('DISPATCH_REQUESTED_AT', ''),
+        'runUrl': 'https://github.com/' + os.environ.get('GITHUB_REPOSITORY', '') + '/actions/runs/' + run_id})
+    if os.environ.get('GITHUB_OUTPUT'):
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+            f.write('fresh=' + str(ok).lower() + '\n')
+
+
+if __name__ == '__main__':
+    main()

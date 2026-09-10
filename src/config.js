@@ -59,7 +59,7 @@ function buildConfig() {
     // 运行模式：local = 直接读本机 DB；cloud = 无 DB，用本机上报上来的 data/quotas.json
     mode: fileConfig.mode ?? 'local',
     // 上报额度文件（cloud 模式读取，本机上报器写入）
-    quotasFile: join(process.cwd(), 'data', 'quotas.json'),
+    quotasFile: join(process.env.SHAWN_DATA_DIR || join(HOME, '.local', 'share', 'shawn-kanban'), 'quotas.json'),
     // 上报数据超过这个时长没更新，就在看板上标成"电脑离线"
     reportStaleMs: Number(fileConfig.reportStaleMs ?? 15 * 60 * 1000)
   };

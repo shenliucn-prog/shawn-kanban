@@ -4,6 +4,10 @@
 **WorkBuddy / Claude Code / Codex 限额、天气、美股 + A股（带 30 日走势图）、世界时钟、汇率**，
 通过局域网喂给 KOReader 的 **Shawn Kanban** 插件，每个整点/半点自动刷新（如 08:30、09:00）。
 
+## 免费云端部署
+
+采用外部定时触发 + GitHub Actions 生成 + Pages 部署产物。源码在 main，额度输入在独立 runtime-data 分支，图片不写入源码。配置与状态检查见 [云端部署](docs/CLOUD_DEPLOY.md)。
+
 ## 运行（Windows 或 macOS 通用）
 
 ```bash

@@ -39,3 +39,8 @@ tools/report_quota.log
 
 # 下载的 CJK 字体（CI 用 apt 或按需下载，不进仓库）
 fonts/
+
+_site/
+render-work/
+runtime-input/
+.env

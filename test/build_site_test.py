@@ -1,0 +1,37 @@
+import importlib.util
+from pathlib import Path
+import tempfile
+import unittest
+import json
+spec=importlib.util.spec_from_file_location('site_builder', Path(__file__).resolve().parents[1]/'tools/build_site.py')
+m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+
+class SiteTests(unittest.TestCase):
+    def test_success_failure_recovery_and_bounded_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out=Path(tmp)
+            self.assertTrue(m.build(out, {}, lambda:(b'first', {}), {'runId':'1'}))
+            first=json.loads((out/'status.json').read_text())
+            def fail(): raise RuntimeError('timeout')
+            self.assertFalse(m.build(out, first, fail, {'runId':'2'}))
+            failed=json.loads((out/'status.json').read_text())
+            self.assertEqual((out/'screen.png').read_bytes(), b'first')
+            self.assertEqual(failed['generatedAt'], first['generatedAt'])
+            self.assertEqual(failed['state'], 'failed')
+            self.assertEqual(len(failed['history']), 2)
+            failed['history'] *= 200
+            self.assertTrue(m.build(out, failed, lambda:(b'new', {}), {'runId':'3'}))
+            latest=json.loads((out/'status.json').read_text())
+            self.assertEqual(latest['state'], 'ready')
+            self.assertNotIn('error', latest)
+            self.assertEqual(len(latest['history']),256)
+            self.assertEqual((out/'screen.png').read_bytes(), b'new')
+            self.assertFalse((out/'dashboard.json').exists())
+
+    def test_first_failure_does_not_produce_deployable_site(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            def fail(): raise RuntimeError('no data')
+            with self.assertRaises(RuntimeError): m.build(Path(tmp), {}, fail, {})
+            self.assertFalse((Path(tmp)/'status.json').exists())
+
+if __name__=='__main__': unittest.main()
