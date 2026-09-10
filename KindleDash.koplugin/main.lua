@@ -4,7 +4,7 @@
 --
 -- 取图三级降级链（关键：电脑关机也能拿到新内容）：
 --   1) 局域网 PC（/api/screen）—— 数据最新最全，电脑关机时连不上
---   2) 云端静态图（GitHub Pages）—— 由 Actions 每 15 分钟渲染，电脑关机仍可用
+--   2) 云端静态图（GitHub Pages）—— 由外部定时任务每半小时触发 Actions 渲染，电脑关机仍可用
 --   3) 本地持久缓存（settings 目录）—— 网络全断时显示最后一次的图
 --
 -- 自动刷新：onResume 唤醒即刷 + 30 分钟定时器。
@@ -16,7 +16,9 @@ local InputDialog = require("ui/widget/inputdialog")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local ImageWidget = require("ui/widget/imagewidget")
 local Geom = require("ui/geometry")
-local Screen = require("device").screen
+local Device = require("device")
+local Screen = Device.screen
+local ltn12 = require("ltn12")
 local GestureRange = require("ui/gesturerange")
 local http = require("socket.http")
 local LuaSettings = require("luasettings")
@@ -35,7 +37,7 @@ local REFRESH_SEC = 30 * 60
 local DEFAULT_HOST = "192.168.31.188"
 local DEFAULT_PORT = "8787"
 -- 云端静态图完整 URL（GitHub Pages），留空则只用局域网
-local DEFAULT_CLOUD = ""
+local DEFAULT_CLOUD = "https://shenliucn-prog.github.io/shawn-kanban/screen.png"
 -- 缓存存到 settings 目录（/mnt/us/koreader/settings/），Kindle 重启后仍在
 local CACHE_IMG_NAME = "kindledash_screen.png"
 local CACHE_TS_NAME  = "kindledash_ts.txt"
@@ -148,11 +150,25 @@ function KindleDash:holdAwake(on)
         self._saved_pause = PluginShare.pause_auto_suspend
         PluginShare.pause_auto_suspend = true
         self._hold_awake = true
+        self._awake_tick = function()
+            if not self._hold_awake or self._suspended then return end
+            -- Reset the native idle timer without disabling the power button.
+            local power = Device:getPowerDevice()
+            if Device:isKindle() and power.resetT1Timeout and not PluginShare.keepalive
+                and not (power:isCharging() and not power:isCharged()) then
+                local ok, err = pcall(power.resetT1Timeout, power)
+                if not ok then logger.warn("ShawnKanban idle reset failed", err) end
+            end
+            UIManager:scheduleIn(240, self._awake_tick)
+        end
+        self._awake_tick()
         logger.info("ShawnKanban holdAwake ON")
     else
         if not self._hold_awake then return end
         PluginShare.pause_auto_suspend = self._saved_pause
         self._hold_awake = false
+        if self._awake_tick then UIManager:unschedule(self._awake_tick) end
+        self._awake_tick = nil
         logger.info("ShawnKanban holdAwake OFF")
     end
 end
@@ -175,16 +191,23 @@ end
 function KindleDash:tryFetch(url)
     local https = url:sub(1, 8) == "https://"
     local ok, body, code = pcall(function()
-        if https and self:fileExists(CA_BUNDLE) then
-            return http.request{
-                url = url,
-                method = "GET",
-                cafile = CA_BUNDLE,
-                verify = "peer",
-                protocol = "tlsv1_2",
-            }
+        local chunks = {}
+        local request = {
+            url = url,
+            method = "GET",
+            sink = ltn12.sink.table(chunks),
+        }
+        if https then
+            if not self:fileExists(CA_BUNDLE) then
+                return nil, "missing CA bundle"
+            end
+            request.cafile = CA_BUNDLE
+            request.verify = "peer"
+            request.protocol = "tlsv1_2"
         end
-        return http.request(url)
+        local success, status = http.request(request)
+        if not success then return nil, status end
+        return table.concat(chunks), tonumber(status)
     end)
     if not ok then
         logger.warn("ShawnKanban fetch error", url, tostring(body))
@@ -304,7 +327,7 @@ function KindleDash:buildScreen(img_path, w, h)
     end
     function container:onResume()
         -- 唤醒即刷
-        pcall(function() KindleDash.refreshDashboard(KindleDash, true, false) end)
+        dash:onResume()
         return true
     end
     self.dash_widget = container
@@ -327,6 +350,7 @@ end
 -- 后台刷新不应把已关闭的看板弹回来，但用户主动点就必须显示——
 -- 首次打开时 dash_widget 本来就是 nil，不能拿它判断"用户想不想看"。
 function KindleDash:refreshDashboard(silent, manual)
+    if self._suspended then return false end
     local data, err, source = self:fetchScreen()
     local cacheImg = self:cacheImg()
     local showing = (self.dash_widget ~= nil)   -- 看板此刻是否正显示在屏幕上
@@ -348,13 +372,15 @@ function KindleDash:refreshDashboard(silent, manual)
             UIManager:show(InfoMessage:new{ text = "刷新失败: " .. tostring(err), timeout = 3 })
         end
         logger.warn("ShawnKanban refresh failed:", err)
-        return
+        return false
     end
 
     -- 成功：写持久缓存 + 时间戳
-    if self:writePng(cacheImg, data) then
-        self:writeTs(os.date("%H:%M"))
+    if not self:writePng(cacheImg, data) then
+        logger.warn("ShawnKanban cache write failed")
+        return false
     end
+    self:writeTs(os.date("%Y-%m-%d %H:%M"))
     self._offline = false
     self._last_ok = true
     self._source = source
@@ -362,7 +388,7 @@ function KindleDash:refreshDashboard(silent, manual)
     -- 后台刷新且看板没在显示：只默默更新缓存，别把看板弹回来（下次打开即是最新）
     if not showing and not manual then
         logger.info("ShawnKanban bg refresh ok source=", source, " 看板未显示, 仅更新缓存")
-        return
+        return true
     end
 
     self:showDashboard(cacheImg, false)
@@ -370,6 +396,41 @@ function KindleDash:refreshDashboard(silent, manual)
         -- 电脑没开时走的正是这条路，明确告诉用户数据来自云端
         UIManager:show(InfoMessage:new{ text = "来自云端（电脑未连上）", timeout = 2 })
     end
+    return true
+end
+
+function KindleDash:onSuspend()
+    self._suspended = true
+    if self._awake_tick then UIManager:unschedule(self._awake_tick) end
+    if self._resume_tick then UIManager:unschedule(self._resume_tick) end
+end
+
+function KindleDash:onResume()
+    self._suspended = false
+    if self._awake_tick then
+        UIManager:unschedule(self._awake_tick)
+        self._awake_tick()
+    end
+    if self._resume_tick then UIManager:unschedule(self._resume_tick) end
+    local attempts = 0
+    self._resume_tick = function()
+        if not self.dash_widget or self._suspended then return end
+        attempts = attempts + 1
+        local ok, fetched = pcall(self.refreshDashboard, self, true, false)
+        if (not ok or not fetched) and attempts < 3 then
+            UIManager:scheduleIn(attempts == 1 and 15 or 40, self._resume_tick)
+        end
+    end
+    -- Wi-Fi restoration is asynchronous after resume.
+    UIManager:scheduleIn(5, self._resume_tick)
+    self:armAutoRefresh()
+end
+
+function KindleDash:onCloseWidget()
+    self.auto_on = false
+    if self._auto_timer then UIManager:unschedule(self._auto_timer) end
+    if self._resume_tick then UIManager:unschedule(self._resume_tick) end
+    self:holdAwake(false)
 end
 
 -- ---------- 自动刷新（对齐整点/半点） ----------
@@ -381,22 +442,27 @@ local function secondsToNextSlot()
 end
 
 function KindleDash:armAutoRefresh()
+    if self._auto_timer then UIManager:unschedule(self._auto_timer) end
     if not self.auto_on then return end
     local function tick()
         if not self.auto_on then return end
         -- 定时器里出错也必须续上下一次，且不能崩
-        pcall(function() self:refreshDashboard(true, false) end)   -- 后台定时：不主动弹窗
+        if self.dash_widget and not self._suspended then
+            pcall(function() self:refreshDashboard(true, false) end)
+        end
         -- 每次都按整点/半点重新对齐：用固定间隔会因刷新耗时而累积漂移
         local delay = secondsToNextSlot()
         if delay < 30 then delay = delay + REFRESH_SEC end
-        self._auto_timer = UIManager:scheduleIn(delay, tick)
+        UIManager:scheduleIn(delay, tick)
     end
     local first = secondsToNextSlot()
     if first < 30 then first = first + REFRESH_SEC end
-    self._auto_timer = UIManager:scheduleIn(first, tick)
+    self._auto_timer = tick
+    UIManager:scheduleIn(first, tick)
 end
 function KindleDash:toggleAutoRefresh()
     self.auto_on = not self.auto_on
+    if self._auto_timer then UIManager:unschedule(self._auto_timer) end
     if self.auto_on then
         self:armAutoRefresh()
         UIManager:show(InfoMessage:new{ text = "自动刷新: 开 (整点/半点)", timeout = 2 })
@@ -465,7 +531,7 @@ function KindleDash:addToMainMenu(menu_items)
             { text = "关于", callback = function()
                 UIManager:show(InfoMessage:new{
                     text = "Shawn Kanban\n取图顺序：局域网 PC > 云端 Pages > 本地缓存\n"
-                       .. "云端每 15 分钟由 GitHub Actions 渲染\n"
+                       .. "云端每半小时触发 GitHub Actions 渲染\n"
                        .. "AI 额度走局域网实时，关机显示最后值\n"
                        .. "唤醒即刷 + 30 分自动\n顶部下滑/顶部点击返回",
                     timeout = 6
