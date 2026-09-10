@@ -1,8 +1,12 @@
 # Shawn Kanban — 越狱 Kindle 常驻看板（原 Kindle Dash）
 
+**中文（默认）** | [English](README.en.md)
+
 跨平台（Windows / macOS）Node.js 服务，把越狱 Kindle 的墨水屏变成一张常驻看板：
 **WorkBuddy / Claude Code / Codex 限额、天气、美股 + A股（带 30 日走势图）、世界时钟、汇率**，
 由电脑或云端生成整屏图片，KOReader 的 **Shawn Kanban** 插件负责下载和显示。看板打开时，每个整点/半点自动刷新（如 08:30、09:00）。
+
+文档提供中英文版本，中文为默认入口。Kindle 菜单、看板内容和运行提示继续使用中文；英文版为使用与部署文档。Mac 局域网配置见 [Mac 安装指南](MAC_SETUP.md)。
 
 ## 免费云端部署
 
@@ -86,3 +90,7 @@ python -m unittest discover -s test -p "*_test.py"
 ```
 
 Lua 行为测试使用模拟的 KOReader 接口，覆盖 HTTPS 图片收集、网络失败、定时器取消、休眠与唤醒重试及清理，不替代真机验证。
+
+## 文档语言约定
+
+修改功能或部署步骤时，同步更新中英文文档。中文文件为默认入口，`.en.md` 为对应英文版；代码标识符、URL 和配置键名保持一致。

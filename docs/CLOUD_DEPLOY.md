@@ -1,5 +1,7 @@
 # 免费云端看板：外部定时触发 + Actions + Pages
 
+**中文（默认）** | [English](CLOUD_DEPLOY.en.md) · [返回 README](../README.md)
+
 ## 结构
 
 - `main`：源码、布局、配置模板、测试。
@@ -17,12 +19,12 @@
 - URL：`https://api.github.com/repos/shenliucn-prog/shawn-kanban/actions/workflows/render.yml/dispatches`
 - 方法：POST
 - 请求正文：`{"ref":"main"}`
-- 每小时第 25、55 分钟运行（UTC）。留几分钟给生成和发布，让 Kindle 在整点/半点取图。
+- 每小时第 25、55 分钟运行。当前任务时区为 America/Los_Angeles，这两个分钟位置与 UTC 一致。留几分钟给生成和发布，让 Kindle 在整点/半点取图。
 - 请求头 `Accept: application/vnd.github+json`
 - 请求头 `Content-Type: application/json`
 - 请求头 `Authorization: Bearer <专用令牌>`
 
-专用 GitHub fine-grained token 应只选 `shawn-kanban` 仓库，授予 Actions: write，用于触发工作流。不要把现有全账户令牌交给外部定时平台。凭证只填入定时器的认证请求头，不放 URL、不写进 Git。
+专用 GitHub fine-grained token 应只选 `shawn-kanban` 仓库，授予 Actions: write 和必需的 Metadata 读取权限，用于触发工作流。设置有效期并在到期前更新。不要把现有全账户令牌交给外部定时平台。凭证只填入定时器的认证请求头，不放 URL、不写进 Git。
 
 API 成功接受触发与图片发布成功是两件事。定时器请求很快返回，不等待生成；生成和部署结果在 GitHub Actions 检查。
 
