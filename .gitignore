@@ -44,3 +44,5 @@ _site/
 render-work/
 runtime-input/
 .env
+
+node_modules
