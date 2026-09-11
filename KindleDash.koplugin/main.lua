@@ -34,7 +34,7 @@ if not ok_ps then PluginShare = nil end
 http.TIMEOUT = 8
 
 local REFRESH_SEC = 30 * 60
-local DEFAULT_HOST = "192.168.31.188"
+local DEFAULT_HOST = ""
 local DEFAULT_PORT = "8787"
 -- 云端静态图完整 URL（GitHub Pages），留空则只用局域网
 local DEFAULT_CLOUD = "https://shenliucn-prog.github.io/shawn-kanban/screen.png"
@@ -174,7 +174,7 @@ function KindleDash:loadHost()
         if s:has("host") then host = s:readSetting("host") or DEFAULT_HOST end
         if s:has("port") then port = s:readSetting("port") or DEFAULT_PORT end
     end
-    if host and not host:find(":", 1, true) then
+    if host and host ~= "" and not host:find(":", 1, true) then
         host = host .. ":" .. port
     end
     return host
@@ -422,7 +422,8 @@ end
 -- 首次打开时 dash_widget 本来就是 nil，不能拿它判断"用户想不想看"。
 function KindleDash:refreshDashboard(silent, manual)
     if self._suspended then return false end
-    local data, err, source = self:fetchScreen()
+    local data, err, source, unchanged = self:fetchScreen()
+    self._fetch_error = err
     local cacheImg = self:cacheImg()
     local showing = (self.dash_widget ~= nil)   -- 看板此刻是否正显示在屏幕上
 
@@ -447,7 +448,10 @@ function KindleDash:refreshDashboard(silent, manual)
     end
 
     -- 成功：写持久缓存 + 时间戳
-    if not self:writePng(cacheImg, data) then
+    local written, write_error = true, nil
+    if not unchanged then written, write_error = self:writePng(cacheImg, data) end
+    if not written then
+        self._fetch_error = write_error
         logger.warn("ShawnKanban cache write failed")
         return false
     end
@@ -462,7 +466,11 @@ function KindleDash:refreshDashboard(silent, manual)
         return true
     end
 
-    self:showDashboard(cacheImg, false)
+    if unchanged and showing then return true end
+    if self:showDashboard(cacheImg, false) == false then
+        self._fetch_error = self._last_error
+        return false
+    end
     if not silent and source == self:tr("云端") then
         -- 电脑没开时走的正是这条路，明确告诉用户数据来自云端
         UIManager:show(InfoMessage:new{ text = self:tr("来自云端（电脑未连上）"), timeout = 2 })
@@ -554,7 +562,7 @@ function KindleDash:setServerAddress()
                 { text = self:tr("取消"), callback = function() UIManager:close(dialog) end },
                 { text = self:tr("保存"), callback = function()
                     local v = dialog:getInputValue()
-                    if v and v ~= "" then
+                    if v ~= nil then
                         self:saveHost(v)
                         UIManager:close(dialog)
                         UIManager:show(InfoMessage:new{ text = self:tr("已保存: ") .. v, timeout = 2 })
@@ -619,4 +627,6 @@ function KindleDash:addToMainMenu(menu_items)
 end
 
 -- 需要 GestureRange（KOReader 顶部全局已 require 过？保险起见 require）
+local plugin_dir = debug.getinfo(1, "S").source:match("^@(.*/)")
+if plugin_dir then dofile(plugin_dir .. "runtime.lua")(KindleDash, plugin_dir) end
 return KindleDash

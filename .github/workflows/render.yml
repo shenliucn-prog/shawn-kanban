@@ -16,6 +16,8 @@ on:
       - '.github/workflows/render.yml'
       - 'tools/build_site.py'
       - 'tools/render_screen.py'
+      - 'tools/layout.py'
+      - 'web/setup/**'
       - 'src/**'
       - 'config.json'
       - 'data/quotes*.txt'

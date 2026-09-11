@@ -7,6 +7,15 @@
 """
 import sys, os, json, math, re, urllib.request, argparse
 from datetime import datetime
+from zoneinfo import ZoneInfo
+try:
+    from layout import load_layout
+except ModuleNotFoundError:
+    from tools.layout import load_layout
+LAYOUT = None
+
+def display_now():
+    return datetime.now(ZoneInfo(LAYOUT["timezone"])) if LAYOUT and LAYOUT.get("timezone") else datetime.now()
 from PIL import Image, ImageDraw, ImageFont
 
 # Language defaults to Chinese for backward-compatible personal deployments.
@@ -258,7 +267,7 @@ def load_quotes():
 
 # ---------- 模块 ----------
 def draw_header(draw, d, y):
-    now = datetime.now()
+    now = display_now()
     day = now.strftime('%d')
     wd = '一二三四五六日'[now.weekday()]
     mw = (['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][now.month-1] + ' ' + ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][now.weekday()]) if LANG == 'en' else '%d月 周%s' % (now.month, wd)
@@ -274,7 +283,7 @@ def draw_header(draw, d, y):
     if city:
         fs = f(F_SMALL)
         draw.text((SCREEN_W - PAD - tw(draw, city, fs), y + F_TIME + 6), city, fill=GRAY, font=fs)
-    return y + 112
+    return y + round(112 * (LAYOUT["fontScale"] if LAYOUT else 1))
 
 def stamp_label(src):
     """把模块数据里的 fetchedAt 变成右上角的时间标注。
@@ -288,7 +297,7 @@ def stamp_label(src):
     if not ts:
         return None
     try:
-        t = datetime.fromtimestamp(float(ts) / 1000.0)
+        t = datetime.fromtimestamp(float(ts) / 1000.0, ZoneInfo(LAYOUT['timezone']) if LAYOUT and LAYOUT.get('timezone') else None)
     except (TypeError, ValueError, OSError, OverflowError):
         return None
     hhmm = t.strftime('%H:%M')
@@ -325,7 +334,7 @@ def draw_news(draw, d, y):
 def draw_ai(draw, d, y):
     """AI 额度：WorkBuddy / Claude Code / Codex 三行统一度量衡"""
     # cloud 模式下若本机久未上报，标题直接点明"电脑离线"，不拿旧值假装新鲜
-    title = tr('AI 额度') if d.get('pcOnline', True) else tr('AI 额度 · 电脑离线')
+    title = ('AI Activity' if LANG == 'en' else 'AI 活动估算') if d.get('pcOnline', True) else ('AI Activity · PC offline' if LANG == 'en' else 'AI 活动 · 电脑离线')
     y = draw_title(draw, y, title, d.get('quotas'))
     q = d.get('quotas', {})
     rows = [
@@ -370,7 +379,7 @@ def draw_weather(draw, d, y):
     w = d.get('weather', {})
     y = draw_title(draw, y, tr('天气'), w)
     if w.get('ok'):
-        t1 = '%s°' % fnum(w.get('temp'))
+        t1 = '%s°%s' % (fnum(w.get('temp')), LAYOUT['temperatureUnit'] if LAYOUT else 'C')
         ft = f(F_BIG, bold=True)
         draw.text((PAD, y), t1, fill=BLACK, font=ft)
         tw1 = tw(draw, t1, ft)
@@ -470,7 +479,7 @@ def draw_quote(draw, d, y, quotes):
         draw.text((PAD, y), tr('（编辑 data/quotes.txt）'), fill=GRAY, font=f(F_SMALL))
         return y + F_SMALL
     ff = f(F_BODY)
-    q = quotes[datetime.now().timetuple().tm_yday % len(quotes)]
+    q = quotes[display_now().timetuple().tm_yday % len(quotes)]
     if ' —— ' in q:
         text, src = q.split(' —— ', 1)
     elif '—' in q:
@@ -486,7 +495,7 @@ def draw_quote(draw, d, y, quotes):
 def draw_footer(draw, d, y, offline=False, last_ok=None):
     hline(draw, y, GRAY, 1)
     y += 12
-    now = datetime.now().strftime('%H:%M')
+    now = display_now().strftime('%H:%M')
     txt = ('Shawn Kanban · 离线 · 最后 %s · 顶部下滑返回' % (last_ok or '?')) if offline \
         else ('Shawn Kanban · 更新 %s · 顶部下滑返回' % now)
     if LANG == 'en':
@@ -498,7 +507,19 @@ def draw_footer(draw, d, y, offline=False, last_ok=None):
 def render(d, out_path=None, language="zh"):
     global LANG
     LANG = language
+    global LAYOUT, SCREEN_W, SCREEN_H, CONTENT_W
+    LAYOUT = load_layout(os.environ.get('SHAWN_CONFIG', 'config.json'))
+    # Compose at a readable portrait ratio, then scale to the selected screen.
+    SCREEN_W = 1072
+    SCREEN_H = round(1072 * LAYOUT['height'] / LAYOUT['width'])
+    CONTENT_W = SCREEN_W - 2 * PAD
+    for key, base in {'F_DATE':96,'F_MONTH':46,'F_TIME':72,'F_TITLE':40,'F_BIG':56,'F_BODY':34,'F_SMALL':27,'F_FOOT':24}.items():
+        globals()[key] = round(base * LAYOUT['fontScale'])
     d = localized_data(d)
+    if LAYOUT['temperatureUnit'] == 'F':
+        for key in ('temp','high','low'):
+            value = (d.get('weather') or {}).get(key)
+            if isinstance(value, (int,float)): d['weather'][key] = value*9/5+32
     img = Image.new('L', (SCREEN_W, SCREEN_H), WHITE)
     draw = ImageDraw.Draw(img)
     quotes = load_quotes()
@@ -509,15 +530,16 @@ def render(d, out_path=None, language="zh"):
     thickline(draw, y, BLACK, 4)
     y += 16
 
-    mods = [
-        lambda y: draw_news(draw, d, y),
-        lambda y: draw_ai(draw, d, y),
-        lambda y: draw_weather(draw, d, y),
-        lambda y: draw_market(draw, d, y),
-        lambda y: draw_clocks(draw, d, y),
-        lambda y: draw_mlb(draw, d, y),
-        lambda y: draw_quote(draw, d, y, quotes)
-    ]
+    registry = {
+        'news': lambda y: draw_news(draw, d, y),
+        'ai': lambda y: draw_ai(draw, d, y),
+        'weather': lambda y: draw_weather(draw, d, y),
+        'market': lambda y: draw_market(draw, d, y),
+        'clocks': lambda y: draw_clocks(draw, d, y),
+        'mlb': lambda y: draw_mlb(draw, d, y),
+        'quote': lambda y: draw_quote(draw, d, y, quotes),
+    }
+    mods = [registry[name] for name in LAYOUT['modules']]
     for fn in mods:
         y = fn(y)
         hline(draw, y + 4, GRAY, 1)
@@ -525,6 +547,9 @@ def render(d, out_path=None, language="zh"):
     y = draw_footer(draw, d, y)
 
     print('[render] final_y=%d screen_h=%d margin=%d' % (y, SCREEN_H, SCREEN_H - y), file=sys.stderr, flush=True)
+    if y > SCREEN_H - 12:
+        raise ValueError('Layout exceeds screen height; reduce modules or font scale')
+    img = img.resize((LAYOUT['width'], LAYOUT['height']), Image.Resampling.LANCZOS)
     out = img.convert('1', dither=Image.Dither.FLOYDSTEINBERG)
     if out_path:
         out.save(out_path)

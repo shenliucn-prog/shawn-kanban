@@ -29,7 +29,7 @@ def previous_site(base, output):
         from PIL import Image
         import io
         with Image.open(io.BytesIO(png)) as im:
-            if im.size != (1072, 1448):
+            if not all(100 <= n <= 4096 for n in im.size):
                 raise ValueError('invalid previous image size')
             im.verify()
         (output / 'screen.png').write_bytes(png)
@@ -58,10 +58,24 @@ def build(output, previous, generate, metadata):
     history = previous.get('history', [])[-255:]
     history.append({k: state.get(k) for k in ('runId', 'trigger', 'requestedAt', 'lastAttemptAt', 'completedAt', 'state', 'generatedAt')})
     state['history'] = history
+    # Immutable image names prevent a manifest/image race across deployments.
+    import io
+    from PIL import Image
+    png = (output / 'screen.png').read_bytes()
+    with Image.open(io.BytesIO(png)) as image:
+        width, height = image.size
+    images = output / 'images'
+    images.mkdir(exist_ok=True)
+    name = state['sha256'] + '.png'
+    (images / name).write_bytes(png)
+    write_json(output / 'manifest.json', {
+        'schemaVersion': 1, 'image_url': 'images/' + name, 'sha256': state['sha256'],
+        'generatedAt': state['generatedAt'], 'state': state['state'], 'width': width, 'height': height,
+        'refreshAfterSeconds': 1800, 'staleAfterSeconds': 2700, 'language': metadata.get('language', 'zh')})
     write_json(output / 'status.json', state)
     (output / '.nojekyll').write_text('')
-    (output / 'index.html').write_text('''<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Shawn Kanban</title><style>body{font-family:system-ui;max-width:720px;margin:24px auto;padding:16px}img{width:100%}</style><h1>Shawn Kanban</h1><p id="status">检查更新时间…</p><img src="screen.png" alt="Kindle 看板"><script>
-async function refresh(){try{const s=await(await fetch('status.json?t='+Date.now())).json();const age=Math.max(0,Math.floor((Date.now()-s.generatedAt)/60000));document.getElementById('status').textContent=(age>45?'内容已过期 · ':s.state==='failed'?'本次生成失败，保留旧图 · ':'正常 · ')+'图片生成于 '+new Date(s.generatedAt).toLocaleString()+'（'+age+' 分钟前）';}catch(e){document.getElementById('status').textContent='无法读取生成状态';}}refresh();setInterval(refresh,60000);
+    (output / 'index.html').write_text('''<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Shawn Kanban</title><style>body{font-family:system-ui;max-width:720px;margin:24px auto;padding:16px}img{width:100%}</style><h1>Shawn Kanban</h1><p id="status">检查更新时间…</p><img id="image" src="screen.png" alt="Kindle 看板"><script>
+async function refresh(){try{const s=await(await fetch('status.json?t='+Date.now())).json();const image=document.getElementById('image');if(image.dataset.hash!==s.sha256){image.src='images/'+s.sha256+'.png';image.dataset.hash=s.sha256;}const age=Math.max(0,Math.floor((Date.now()-s.generatedAt)/60000));document.getElementById('status').textContent=(age>45?'内容已过期 · ':s.state==='failed'?'本次生成失败，保留旧图 · ':'正常 · ')+'图片生成于 '+new Date(s.generatedAt).toLocaleString()+'（'+age+' 分钟前）';}catch(e){document.getElementById('status').textContent='无法读取生成状态';}}refresh();setInterval(refresh,60000);
 </script></html>''', encoding='utf-8')
     return success
 
@@ -91,7 +105,7 @@ def main():
                         '--out', str(work / 'screen.png'), '--lang', language], check=True, timeout=60)
         from PIL import Image
         with Image.open(work / 'screen.png') as im:
-            if im.size != (1072, 1448):
+            if not all(100 <= n <= 4096 for n in im.size):
                 raise ValueError('unexpected image size')
             im.verify()
         return (work / 'screen.png').read_bytes(), sections
@@ -117,6 +131,8 @@ def main():
         page = page.replace(zh, en)
     (english / 'index.html').write_text(page, encoding='utf-8')
     ok = ok and ok_en
+    import shutil
+    shutil.copytree('web/setup', output / 'setup', dirs_exist_ok=True)
     if os.environ.get('GITHUB_OUTPUT'):
 
         with open(os.environ['GITHUB_OUTPUT'], 'a') as f:

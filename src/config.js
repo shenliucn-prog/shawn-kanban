@@ -28,7 +28,7 @@ const DEFAULT_CLOCKS = [
 function buildConfig() {
   let fileConfig = {};
   try {
-    const p = join(process.cwd(), 'config.json');
+    const p = process.env.SHAWN_CONFIG || join(process.cwd(), 'config.json');
     if (existsSync(p)) fileConfig = JSON.parse(readFileSync(p, 'utf-8'));
   } catch {
     /* ignore */

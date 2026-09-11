@@ -1,16 +1,18 @@
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { buildDashboard } from './aggregator.js';
 import { readStatus } from './db.js';
 import { config } from './config.js';
 
+const imageCache = new Map();
 const PYTHON = process.env.PYTHON_BIN || (process.platform === 'win32' ? 'python' : 'python3');
 
-function renderScreenPng(language = 'zh') {
+function renderScreenPng(language = 'zh', port = 8787) {
   return new Promise((resolve, reject) => {
     const script = path.join(process.cwd(), 'tools', 'render_screen.py');
-    const child = spawn(PYTHON, [script, '--lang', language], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(PYTHON, [script, '--lang', language, '--url', 'http://127.0.0.1:' + port + '/api/dashboard'], { stdio: ['ignore', 'pipe', 'pipe'], timeout: 90000 });
     const chunks = [];
     child.stdout.on('data', d => chunks.push(d));
     child.stderr.on('data', d => process.stderr.write('[render] ' + d));
@@ -214,7 +216,7 @@ scheduleRefresh();
 </body></html>`;
 }
 
-export function createServer({ db = null, cfg = config } = {}) {
+export function createServer({ db = null, cfg = config, renderImage = renderScreenPng } = {}) {
   return http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     const remote = req.socket.remoteAddress || '?';
@@ -237,9 +239,29 @@ export function createServer({ db = null, cfg = config } = {}) {
       return;
     }
 
+    if (url.pathname.startsWith('/api/image/')) {
+      const key = url.pathname.slice('/api/image/'.length).replace(/\.png$/, '');
+      const image = imageCache.get(key);
+      if (!image) { res.writeHead(404); res.end('Image expired; request a new manifest'); return; }
+      res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': image.length });
+      res.end(image); return;
+    }
+    if (url.pathname === '/api/display') {
+      try {
+        const language = url.searchParams.get('lang') === 'en' ? 'en' : 'zh';
+        const png = await renderImage(language, req.socket.localPort);
+        const sha256 = createHash('sha256').update(png).digest('hex');
+        imageCache.set(sha256, png);
+        while (imageCache.size > 8) imageCache.delete(imageCache.keys().next().value);
+        sendJson(res, { schemaVersion: 1, image_url: '/api/image/' + sha256 + '.png', sha256,
+          generatedAt: Date.now(), width: png.readUInt32BE(16), height: png.readUInt32BE(20),
+          state: 'ready', language, staleAfterSeconds: 2700, refreshAfterSeconds: 1800 });
+      } catch { res.writeHead(503); res.end('Image generation failed'); }
+      return;
+    }
     if (url.pathname === '/api/screen') {
       try {
-        const png = await renderScreenPng(url.searchParams.get('lang') === 'en' ? 'en' : 'zh');
+        const png = await renderImage(url.searchParams.get('lang') === 'en' ? 'en' : 'zh', req.socket.localPort);
         res.writeHead(200, {
           'Content-Type': 'image/png',
           'Content-Length': png.length,
