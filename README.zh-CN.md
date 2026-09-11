@@ -8,6 +8,14 @@
 
 仓库默认展示英文，本文为中文说明。Kindle 插件支持中英文菜单、提示和图片；新安装按 KOReader 语言选择，已有服务器配置的用户升级后保留中文。通过 **Shawn Kanban → Language / 语言 → English / 中文** 可独立选择，不要求更改 Kindle 固件语言。Mac 局域网配置见 [Mac 安装指南](MAC_SETUP.zh-CN.md)。
 
+## 安装 v0.2.0
+
+从 [Releases](https://github.com/shenliucn-prog/shawn-kanban/releases) 下载版本安装包，按 [升级与回退说明](docs/UPGRADE.zh-CN.md) 复制完整插件目录（三个 Lua 文件）。你的中文地址与配置保留。
+
+使用 [配置工具](https://shenliucn-prog.github.io/shawn-kanban/setup/) 设置自己生成端的城市、时区、温度单位、屏幕尺寸、字号及模块顺序。可先导入旧 config.json 保留其他设置；提供日常、工作、极简模板。下载的配置需要放到自己的生成端，不会改变公共示例。
+
+Kindle 菜单新增设置／测试图片、设备状态、刷新间隔、按需联网和夜间降频。RTC 是需确认的单次实验，不默认开启。设备状态将图片生成时间与下载时间分开，避免旧图伪装为新数据。
+
 ## 免费云端部署
 
 采用 cron-job.org 外部定时触发 + GitHub Actions 生成 + GitHub Pages 发布：每小时第 **25、55 分钟**触发，供 Kindle 在整点、半点取图。GitHub 自带定时任务作为备用；触发和发布可能延迟，不保证准点。
@@ -66,8 +74,8 @@ npm start
 
 - 点击屏幕顶部10%区域，或从顶部25%区域向下滑动，可退出看板；有返回键的设备也可按返回键退出。
 - 看板打开时暂停 KOReader 自动休眠，并每4分钟通过 KOReader 的 Kindle 电源接口重置系统空闲计时；兼容已有 KeepAlive 状态及充电状态。退出看板或卸载插件时取消计时并恢复原休眠设置。
-- 电源键仍可手动休眠。唤醒后约5秒尝试刷新，失败时在约20秒、60秒重试，给 Wi-Fi 恢复留出时间。Wi-Fi 需要已开启并能够重新连接；插件不会强制打开 Wi-Fi。
-- 自动刷新在整点、半点执行，仅看板显示期间取图；关闭自动刷新会取消该定时器，手动刷新和唤醒刷新仍可用。
+- 电源键仍可手动休眠。唤醒后约5秒尝试刷新；失败按1、2、4、8、16、30分钟退避重试。按需联网可选择开启，默认不改变网络状态。
+- 自动刷新默认在整点、半点执行，可配置5–1440分钟，仅看板显示期间取图；关闭自动刷新会取消该定时器，手动刷新和唤醒刷新仍可用。
 - **当前不是深度休眠后的定时唤醒方案**：设备真正休眠时不能依靠界面定时器刷新。常驻看板通过保持运行实现刷新，会增加耗电。
 
 本次修复已通过 Lua 语法和模拟行为测试；尚未完成真机睡眠、Wi-Fi 恢复和长期耗电验证。
@@ -95,7 +103,7 @@ npm ci
 npm run lint
 npm test
 python -m pip install lupa Pillow
-python tools/check_lua.py
+python tools/check_lua.py KindleDash.koplugin/main.lua KindleDash.koplugin/runtime.lua KindleDash.koplugin/sha256.lua
 python -m unittest discover -s test -p "*_test.py"
 ```
 
@@ -104,3 +112,13 @@ Lua 行为测试使用模拟的 KOReader 接口，覆盖 HTTPS 图片收集、�
 ## 文档语言约定
 
 修改功能或部署步骤时，同步更新中英文文档。英文文件为默认入口，`.zh-CN.md` 为对应中文版；代码标识符、URL 和配置键名保持一致。
+
+## 布局配置
+
+通过配置工具，或在 config.json 中添加 `display`：
+
+```json
+{"display":{"preset":"daily","modules":["news","ai","weather","market","clocks","mlb","quote"],"width":1072,"height":1448,"fontScale":1,"timezone":"Asia/Shanghai","temperatureUnit":"C"}}
+```
+
+模块列表决定开关与顺序，拒绝未知和重复模块。横屏或大字号请减少模块；内容超过屏幕时生成失败并保留云端旧图。预览仅为结构示意。生成端时区控制页眉与采集时间，世界时钟和 MLB UTC+8 单独定义。可用 `SHAWN_CONFIG` 指定配置文件；Windows 时区支持可能需要 `pip install tzdata`。
